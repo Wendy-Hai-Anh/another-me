@@ -6,10 +6,10 @@ dotenv.config({ path: ".env.local", quiet: true });
 
 const didApiKey = process.env.DID_API_KEY;
 
-const imagePath = "portrait.jpg";
+const imagePath = "assets/images/portrait.jpg";
 const imageMimeType = "image/jpeg";
 
-const audioPath = "cloned-voice-test.mp3";
+const audioPath = "assets/audio/cloned-voice-test.mp3";
 const audioMimeType = "audio/mpeg";
 
 if (!didApiKey) {
@@ -206,9 +206,9 @@ async function downloadVideo(resultUrl) {
 
   const videoBuffer = Buffer.from(await response.arrayBuffer());
 
-  fs.writeFileSync("did-talk-1.mp4", videoBuffer);
+  fs.writeFileSync("assets/video/did-talk-1.mp4", videoBuffer);
 
-  console.log("Success: did-talk-1.mp4 was created.");
+  console.log("Success: assets/video/did-talk-1.mp4 was created.");
 }
 
 async function main() {

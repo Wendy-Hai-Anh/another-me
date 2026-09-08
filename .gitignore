@@ -1,4 +1,8 @@
-.env
-.env.local
 node_modules/
-output.mp3
+.env
+.env.*
+!*.example
+*.log
+assets/audio/output.mp3
+.DS_Store
+Thumbs.db

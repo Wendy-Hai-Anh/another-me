@@ -25,9 +25,9 @@ async function main() {
   console.log("Audio received. Saving file...");
 
   const arrayBuffer = await new Response(audio).arrayBuffer();
-  fs.writeFileSync("output.mp3", Buffer.from(arrayBuffer));
+  fs.writeFileSync("assets/audio/output.mp3", Buffer.from(arrayBuffer));
 
-  console.log("Success: output.mp3 has been created.");
+  console.log("Success: assets/audio/output.mp3 has been created.");
 }
 
 main().catch(console.error);

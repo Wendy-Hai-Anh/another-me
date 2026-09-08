@@ -1,15 +1,19 @@
 {
   "name": "another-me",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "private": true,
+  "description": "A local-first interactive browser experience about identity and AI automation.",
   "type": "commonjs",
+  "scripts": {
+    "start": "node backend/dev-server.cjs",
+    "check": "node --check frontend/scripts/app.js",
+    "test": "node --test --test-isolation=none tests/camera-capture.test.cjs",
+    "clone:voice": "node backend/scripts/clone-voice.mjs",
+    "test:elevenlabs": "node tests/integration/elevenlabs.integration.mjs",
+    "test:openai": "node tests/integration/openai.integration.mjs",
+    "test:did": "node tests/integration/did.integration.mjs"
+  },
+  "license": "ISC",
   "dependencies": {
     "@elevenlabs/elevenlabs-js": "^2.64.0",
     "dotenv": "^17.4.2",

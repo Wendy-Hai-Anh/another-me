@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>another-me | Resisting AI Automation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+  <div class="page-shell">
+    <div class="ambient-shape ambient-shape--one" aria-hidden="true"></div>
+    <div class="ambient-shape ambient-shape--two" aria-hidden="true"></div>
+
+    <main class="experience-shell" data-stage="1" data-status="learning">
+      <header class="experience-header">
+        <div>
+          <p class="eyebrow" id="stageEyebrow">Resisting AI Automation</p>
+          <h1>Can a machine become you?</h1>
+          <p class="intro-copy" id="introCopy">Teach the system who you are. It will learn from every choice you make.</p>
+        </div>
+
+        <div class="header-actions">
+          <button class="ghost-button" id="voiceToggle" type="button" aria-pressed="false">AI voice: off</button>
+          <button class="ghost-button" id="restartButton" type="button">Restart</button>
+        </div>
+      </header>
+
+      <section class="status-panel" aria-label="AI status meters">
+        <div class="status-pill">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="statusText">Learning</span>
+          <span id="statusValue">0%</span>
+        </div>
+
+        <div class="meter-block">
+          <div class="meter-label">
+            <span>Learning</span>
+            <span id="learningValue">0%</span>
+          </div>
+          <div class="meter-track" aria-hidden="true">
+            <div class="meter-fill meter-fill--learning" id="learningMeter"></div>
+          </div>
+        </div>
+
+        <div class="meter-block">
+          <div class="meter-label">
+            <span>Automation</span>
+            <span id="automationValue">0%</span>
+          </div>
+          <div class="meter-track" aria-hidden="true">
+            <div class="meter-fill meter-fill--automation" id="automationMeter"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="system-panel" aria-label="AI message">
+        <p class="system-label">System message</p>
+        <p class="system-message" id="systemMessage" role="status" aria-live="polite">Learning: 0%</p>
+      </section>
+
+      <section class="stage-container" id="stageContainer" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <script src="scripts/app.js"></script>
+</body>
+</html>
