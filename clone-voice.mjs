@@ -6,9 +6,7 @@ import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 dotenv.config({ path: ".env.local", quiet: true });
 
 const apiKey = process.env.ELEVENLABS_API_KEY;
-const samplePath = "assets/audio/voice-sample.m4a";
-const voiceIdPath = "assets/audio/voice-id.txt";
-const outputPath = "assets/audio/cloned-voice-test.mp3";
+const samplePath = "voice-sample.m4a";
 
 if (!apiKey) {
   throw new Error("ElevenLabs API key was not found.");
@@ -51,7 +49,7 @@ async function main() {
   const clone = await cloneResponse.json();
   const voiceId = clone.voice_id;
 
-  fs.writeFileSync(voiceIdPath, voiceId);
+  fs.writeFileSync("voice-id.txt", voiceId);
   console.log("Voice clone created.");
   console.log("Generating test speech...");
 
@@ -71,12 +69,12 @@ async function main() {
 
   const arrayBuffer = await new Response(audio).arrayBuffer();
   fs.writeFileSync(
-    outputPath,
+    "cloned-voice-test.mp3",
     Buffer.from(arrayBuffer)
   );
 
-  console.log(`Success: ${outputPath} was created.`);
-  console.log(`The voice ID was saved in ${voiceIdPath}.`);
+  console.log("Success: cloned-voice-test.mp3 was created.");
+  console.log("The voice ID was saved in voice-id.txt.");
 }
 
 main().catch((error) => {
