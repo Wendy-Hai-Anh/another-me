@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Identity Logic Test</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: Arial, sans-serif;
+      color: #1f2933;
+      background: #f4f5f7;
+    }
+    main {
+      width: min(100%, 820px);
+      margin: 0 auto;
+      padding: 24px;
+      border: 1px solid #c7cdd4;
+      background: #fff;
+    }
+    h1 { margin-top: 0; font-size: 1.6rem; }
+    h2 { margin-top: 28px; font-size: 1.15rem; }
+    label { display: block; margin: 18px 0 6px; font-weight: bold; }
+    select,
+    textarea,
+    button {
+      font: inherit;
+    }
+    select,
+    textarea {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #7b8794;
+      border-radius: 3px;
+      color: inherit;
+      background: #fff;
+    }
+    textarea { resize: vertical; }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 14px 0;
+    }
+    button {
+      min-height: 44px;
+      padding: 10px 16px;
+      border: 1px solid #52606d;
+      border-radius: 4px;
+      color: inherit;
+      background: #eef1f4;
+      cursor: pointer;
+    }
+    button:disabled { cursor: not-allowed; opacity: 0.55; }
+    button:focus-visible,
+    select:focus-visible,
+    textarea:focus-visible {
+      outline: 3px solid #1769aa;
+      outline-offset: 2px;
+    }
+    #status {
+      min-height: 1.5em;
+      padding: 10px;
+      border-left: 4px solid #7b8794;
+      background: #f7f8fa;
+    }
+    #status[data-kind="error"] { border-left-color: #b42318; color: #8a1c13; }
+    #status[data-kind="success"] { border-left-color: #1f7a45; color: #175c35; }
+    pre {
+      overflow: auto;
+      max-height: 520px;
+      padding: 14px;
+      border: 1px solid #c7cdd4;
+      background: #f7f8fa;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Identity Logic Test</h1>
+    <p>This technical test constructs a temporary algorithmic profile from fictional answers and predicts one possible response.</p>
+
+    <label for="testCase">Test case</label>
+    <select id="testCase" disabled>
+      <option>Loading test cases...</option>
+    </select>
+    <p id="caseDescription"></p>
+
+    <label for="answers">Sample participant answers (JSON)</label>
+    <textarea id="answers" rows="14" spellcheck="false"></textarea>
+
+    <div class="controls">
+      <button id="generateProfile" type="button" disabled>Generate Identity Profile</button>
+    </div>
+
+    <label for="targetQuestion">Target prediction question</label>
+    <textarea id="targetQuestion" rows="2"></textarea>
+
+    <div class="controls">
+      <button id="generatePrediction" type="button" disabled>Generate Prediction</button>
+    </div>
+
+    <p id="status" role="status" aria-live="polite">Loading fictional test cases...</p>
+
+    <section id="profileSection" hidden>
+      <h2>Structured profile output</h2>
+      <pre id="profileOutput"></pre>
+    </section>
+
+    <section id="predictionSection" hidden>
+      <h2>Structured prediction output</h2>
+      <pre id="predictionOutput"></pre>
+    </section>
+  </main>
+
+  <script>
+    const testCaseSelect = document.getElementById("testCase");
+    const caseDescription = document.getElementById("caseDescription");
+    const answersInput = document.getElementById("answers");
+    const targetQuestionInput = document.getElementById("targetQuestion");
+    const profileButton = document.getElementById("generateProfile");
+    const predictionButton = document.getElementById("generatePrediction");
+    const status = document.getElementById("status");
+    const profileSection = document.getElementById("profileSection");
+    const profileOutput = document.getElementById("profileOutput");
+    const predictionSection = document.getElementById("predictionSection");
+    const predictionOutput = document.getElementById("predictionOutput");
+
+    let testCases = [];
+    let currentProfile = null;
+    let busy = false;
+
+    function setStatus(message, kind = "info") {
+      status.textContent = message;
+      status.dataset.kind = kind;
+    }
+
+    function setBusy(value) {
+      busy = value;
+      testCaseSelect.disabled = value;
+      answersInput.disabled = value;
+      targetQuestionInput.disabled = value;
+      profileButton.disabled = value;
+      predictionButton.disabled = value || !currentProfile;
+    }
+
+    function clearGeneratedOutputs() {
+      currentProfile = null;
+      profileOutput.textContent = "";
+      predictionOutput.textContent = "";
+      profileSection.hidden = true;
+      predictionSection.hidden = true;
+      predictionButton.disabled = true;
+    }
+
+    function parseAnswers() {
+      let answers;
+      try {
+        answers = JSON.parse(answersInput.value);
+      } catch {
+        throw new Error("Participant answers must be valid JSON.");
+      }
+      if (!Array.isArray(answers) || answers.length === 0) {
+        throw new Error("Participant answers must be a non-empty JSON array.");
+      }
+      return answers;
+    }
+
+    async function requestJson(url, options = {}) {
+      let response;
+      try {
+        response = await fetch(url, options);
+      } catch {
+        throw new Error(`Cannot reach the Identity Logic Test server at ${window.location.origin}.`);
+      }
+
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const details = Array.isArray(body.details) && body.details.length
+          ? ` ${body.details.join(" ")}`
+          : "";
+        throw new Error(`${body.error || "The request failed."}${details}`);
+      }
+      return body;
+    }
+
+    function applyTestCase() {
+      const selected = testCases.find((testCase) => testCase.id === testCaseSelect.value);
+      if (!selected) return;
+      answersInput.value = JSON.stringify(selected.answers, null, 2);
+      targetQuestionInput.value = selected.target_question;
+      caseDescription.textContent = selected.description;
+      clearGeneratedOutputs();
+      setStatus("Test case loaded. Generate the identity profile first.");
+    }
+
+    async function loadTestCases() {
+      if (window.location.protocol === "file:") {
+        setStatus("Run node identity-logic-test/server.cjs and open http://127.0.0.1:4174 instead of this file.", "error");
+        return;
+      }
+
+      try {
+        const body = await requestJson("/api/test-cases");
+        testCases = body.test_cases;
+        testCaseSelect.innerHTML = "";
+        testCases.forEach((testCase) => {
+          const option = document.createElement("option");
+          option.value = testCase.id;
+          option.textContent = testCase.name;
+          testCaseSelect.append(option);
+        });
+        testCaseSelect.disabled = false;
+        profileButton.disabled = false;
+        applyTestCase();
+        setStatus(`Ready. Server model: ${body.model}.`);
+      } catch (error) {
+        setStatus(error.message, "error");
+      }
+    }
+
+    async function generateProfile() {
+      if (busy) return;
+      clearGeneratedOutputs();
+      let answers;
+      try {
+        answers = parseAnswers();
+      } catch (error) {
+        setStatus(error.message, "error");
+        return;
+      }
+
+      setBusy(true);
+      setStatus("Generating and validating identity profile...");
+      try {
+        const body = await requestJson("/api/profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answers })
+        });
+        currentProfile = body.profile;
+        profileOutput.textContent = JSON.stringify(body.profile, null, 2);
+        profileSection.hidden = false;
+        setStatus(`Profile generated and validated in ${body.meta.response_time_ms} ms.`, "success");
+      } catch (error) {
+        setStatus(error.message, "error");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function generatePrediction() {
+      if (busy || !currentProfile) return;
+      let answers;
+      try {
+        answers = parseAnswers();
+      } catch (error) {
+        setStatus(error.message, "error");
+        return;
+      }
+      const targetQuestion = targetQuestionInput.value.trim();
+      if (!targetQuestion) {
+        setStatus("Enter a target prediction question.", "error");
+        return;
+      }
+
+      setBusy(true);
+      predictionSection.hidden = true;
+      predictionOutput.textContent = "";
+      setStatus("Generating and validating prediction...");
+      try {
+        const body = await requestJson("/api/prediction", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            answers,
+            profile: currentProfile,
+            target_question: targetQuestion
+          })
+        });
+        predictionOutput.textContent = JSON.stringify(body.prediction, null, 2);
+        predictionSection.hidden = false;
+        setStatus(`Prediction generated and validated in ${body.meta.response_time_ms} ms.`, "success");
+      } catch (error) {
+        setStatus(error.message, "error");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    testCaseSelect.addEventListener("change", applyTestCase);
+    answersInput.addEventListener("input", clearGeneratedOutputs);
+    targetQuestionInput.addEventListener("input", () => {
+      predictionOutput.textContent = "";
+      predictionSection.hidden = true;
+    });
+    profileButton.addEventListener("click", generateProfile);
+    predictionButton.addEventListener("click", generatePrediction);
+    loadTestCases();
+  </script>
+</body>
+</html>

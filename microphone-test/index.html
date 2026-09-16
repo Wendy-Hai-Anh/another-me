@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Microphone Recording and Transcription Test</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: Arial, sans-serif;
+      color: #1f2933;
+      background: #f4f5f7;
+    }
+
+    main {
+      width: min(100%, 680px);
+      margin: 0 auto;
+      padding: 24px;
+      border: 1px solid #c7cdd4;
+      background: white;
+    }
+
+    h1 {
+      margin-top: 0;
+      font-size: 1.6rem;
+    }
+
+    h2 {
+      font-size: 1.1rem;
+    }
+
+    .timer {
+      margin: 20px 0;
+      font-variant-numeric: tabular-nums;
+      font-weight: bold;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 16px 0;
+    }
+
+    button {
+      min-height: 44px;
+      padding: 10px 16px;
+      border: 1px solid #52606d;
+      border-radius: 4px;
+      background: #eef1f4;
+      color: #1f2933;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    button:focus-visible,
+    audio:focus-visible {
+      outline: 3px solid #1769aa;
+      outline-offset: 2px;
+    }
+
+    audio {
+      width: 100%;
+      margin: 8px 0;
+    }
+
+    #status {
+      min-height: 1.5em;
+      padding: 10px;
+      border-left: 4px solid #7b8794;
+      background: #f7f8fa;
+    }
+
+    #status[data-kind="error"] {
+      border-left-color: #b42318;
+      color: #8a1c13;
+    }
+
+    #status[data-kind="success"] {
+      border-left-color: #1f7a45;
+      color: #175c35;
+    }
+
+    #transcript {
+      min-height: 3em;
+      padding: 12px;
+      border: 1px solid #c7cdd4;
+      white-space: pre-wrap;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <main id="microphoneTest">
+    <h1>Microphone Recording and Transcription Test</h1>
+    <p>Allow microphone access to record and transcribe one short audio clip. The recording stays in browser memory unless you choose to transcribe it.</p>
+
+    <p class="timer">Recording time: <output id="timer">00:00</output> / 01:00</p>
+
+    <div class="controls">
+      <button id="startRecording" type="button">Start Recording</button>
+      <button id="stopRecording" type="button" hidden>Stop Recording</button>
+    </div>
+
+    <section id="recordingResult" hidden>
+      <h2>Recording</h2>
+      <audio id="audioPlayback" controls preload="metadata"></audio>
+      <p id="format"></p>
+
+      <div class="controls">
+        <button id="deleteRecording" type="button">Delete Recording</button>
+        <button id="recordAgain" type="button">Record Again</button>
+        <button id="transcribeRecording" type="button">Transcribe Recording</button>
+      </div>
+    </section>
+
+    <p id="status" role="status" aria-live="polite">Ready. Microphone permission will be requested when you start recording.</p>
+
+    <section id="transcriptionResult" hidden>
+      <h2>Transcription</h2>
+      <div id="transcript"></div>
+    </section>
+  </main>
+
+  <script>
+    const MAX_RECORDING_MS = 60_000;
+    const MIME_TYPE_CANDIDATES = [
+      "audio/webm;codecs=opus",
+      "audio/ogg;codecs=opus",
+      "audio/mp4"
+    ];
+    const ACCEPTED_AUDIO_TYPES = new Set([
+      "audio/webm",
+      "audio/ogg",
+      "audio/mp4",
+      "audio/mpeg",
+      "audio/wav",
+      "audio/x-wav",
+      "audio/aac",
+      "audio/flac"
+    ]);
+
+    const root = document.getElementById("microphoneTest");
+    const startButton = document.getElementById("startRecording");
+    const stopButton = document.getElementById("stopRecording");
+    const deleteButton = document.getElementById("deleteRecording");
+    const recordAgainButton = document.getElementById("recordAgain");
+    const transcribeButton = document.getElementById("transcribeRecording");
+    const timer = document.getElementById("timer");
+    const status = document.getElementById("status");
+    const recordingResult = document.getElementById("recordingResult");
+    const audioPlayback = document.getElementById("audioPlayback");
+    const format = document.getElementById("format");
+    const transcriptionResult = document.getElementById("transcriptionResult");
+    const transcript = document.getElementById("transcript");
+
+    let microphoneStream = null;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let recordingBlob = null;
+    let recordingUrl = "";
+    let recordingStartedAt = 0;
+    let timerIntervalId = null;
+    let recordingTimeoutId = null;
+    let stoppedAtLimit = false;
+    let cleaningUp = false;
+
+    function setStatus(message, kind = "info") {
+      status.textContent = message;
+      status.dataset.kind = kind;
+    }
+
+    function formatTime(totalSeconds) {
+      const seconds = Math.min(60, Math.max(0, totalSeconds));
+      return `00:${String(seconds).padStart(2, "0")}`;
+    }
+
+    function updateTimer() {
+      const elapsedSeconds = Math.floor((Date.now() - recordingStartedAt) / 1000);
+      timer.value = formatTime(elapsedSeconds);
+      timer.textContent = formatTime(elapsedSeconds);
+    }
+
+    function clearTimers() {
+      window.clearInterval(timerIntervalId);
+      window.clearTimeout(recordingTimeoutId);
+      timerIntervalId = null;
+      recordingTimeoutId = null;
+    }
+
+    function stopMicrophoneTracks() {
+      if (microphoneStream) {
+        microphoneStream.getTracks().forEach((track) => track.stop());
+        microphoneStream = null;
+      }
+    }
+
+    function revokeRecordingUrl() {
+      audioPlayback.pause();
+      audioPlayback.removeAttribute("src");
+      audioPlayback.load();
+
+      if (recordingUrl) {
+        URL.revokeObjectURL(recordingUrl);
+        recordingUrl = "";
+      }
+    }
+
+    function clearRecording() {
+      clearTimers();
+      stopMicrophoneTracks();
+      revokeRecordingUrl();
+      recordingBlob = null;
+      recordedChunks = [];
+      transcript.textContent = "";
+      transcriptionResult.hidden = true;
+      recordingResult.hidden = true;
+      format.textContent = "";
+      timer.value = "00:00";
+      timer.textContent = "00:00";
+    }
+
+    function normalizeMimeType(type) {
+      return (type || "").split(";", 1)[0].trim().toLowerCase();
+    }
+
+    function selectMimeType() {
+      if (typeof MediaRecorder.isTypeSupported !== "function") {
+        return "";
+      }
+
+      return MIME_TYPE_CANDIDATES.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+    }
+
+    function showReadyState() {
+      startButton.hidden = false;
+      startButton.disabled = false;
+      stopButton.hidden = true;
+      stopButton.disabled = true;
+    }
+
+    function describePermissionError(error) {
+      if (error.name === "NotAllowedError" || error.name === "SecurityError") {
+        return "Microphone permission was denied. Allow microphone access in your browser settings and try again.";
+      }
+
+      if (error.name === "NotFoundError" || error.name === "DevicesNotFoundError" || error.name === "OverconstrainedError") {
+        return "No microphone was detected. Connect or enable a microphone and try again.";
+      }
+
+      if (error.name === "NotReadableError" || error.name === "TrackStartError") {
+        return "The microphone is unavailable or already being used by another application.";
+      }
+
+      return "The microphone could not start. Check the device and browser permissions, then try again.";
+    }
+
+    function finishRecording() {
+      if (cleaningUp) {
+        recordedChunks = [];
+        return;
+      }
+
+      const recorderMimeType = mediaRecorder ? mediaRecorder.mimeType : "";
+      const chunkMimeType = recordedChunks.find((chunk) => chunk.type)?.type || "";
+      const mimeType = recorderMimeType || chunkMimeType;
+      const normalizedType = normalizeMimeType(mimeType);
+      const blob = new Blob(recordedChunks, { type: mimeType });
+
+      mediaRecorder = null;
+      recordedChunks = [];
+      stopMicrophoneTracks();
+      stopButton.hidden = true;
+      stopButton.disabled = true;
+
+      if (!blob.size) {
+        showReadyState();
+        setStatus("The recording was empty or invalid. Check the microphone and record again.", "error");
+        return;
+      }
+
+      if (!ACCEPTED_AUDIO_TYPES.has(normalizedType)) {
+        showReadyState();
+        setStatus("This browser produced an unsupported audio format. Try a current version of Chrome, Edge, Firefox, or Safari.", "error");
+        return;
+      }
+
+      recordingBlob = blob;
+      recordingUrl = URL.createObjectURL(blob);
+      audioPlayback.src = recordingUrl;
+      format.textContent = `Audio format: ${mimeType || normalizedType}`;
+      recordingResult.hidden = false;
+      startButton.hidden = true;
+      const limitMessage = stoppedAtLimit ? " The 60-second limit was reached." : "";
+      setStatus(`Recording completed.${limitMessage} Listen to it before transcription.`);
+    }
+
+    function stopRecording() {
+      if (!mediaRecorder || mediaRecorder.state === "inactive") {
+        stopMicrophoneTracks();
+        return;
+      }
+
+      clearTimers();
+      stopButton.disabled = true;
+      setStatus(stoppedAtLimit ? "The 60-second limit was reached. Preparing playback..." : "Preparing your recording...");
+      mediaRecorder.stop();
+      stopMicrophoneTracks();
+    }
+
+    async function startRecording() {
+      if (!window.isSecureContext) {
+        setStatus("Microphone access requires HTTPS or localhost. Open this test through the local server.", "error");
+        return;
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setStatus("This browser does not support microphone access with getUserMedia.", "error");
+        return;
+      }
+
+      if (typeof MediaRecorder === "undefined") {
+        setStatus("This browser does not support audio recording with MediaRecorder.", "error");
+        return;
+      }
+
+      clearRecording();
+      startButton.disabled = true;
+      setStatus("Waiting for microphone permission...");
+
+      try {
+        microphoneStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        const preferredMimeType = selectMimeType();
+        mediaRecorder = preferredMimeType
+          ? new MediaRecorder(microphoneStream, { mimeType: preferredMimeType })
+          : new MediaRecorder(microphoneStream);
+
+        recordedChunks = [];
+        stoppedAtLimit = false;
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data && event.data.size > 0) {
+            recordedChunks.push(event.data);
+          }
+        };
+        mediaRecorder.onerror = () => {
+          clearTimers();
+          stopMicrophoneTracks();
+          showReadyState();
+          setStatus("Audio recording failed or the browser produced an unsupported format.", "error");
+        };
+        mediaRecorder.onstop = finishRecording;
+        mediaRecorder.start(250);
+
+        recordingStartedAt = Date.now();
+        updateTimer();
+        timerIntervalId = window.setInterval(updateTimer, 250);
+        recordingTimeoutId = window.setTimeout(() => {
+          stoppedAtLimit = true;
+          timer.value = "01:00";
+          timer.textContent = "01:00";
+          stopRecording();
+        }, MAX_RECORDING_MS);
+
+        startButton.hidden = true;
+        stopButton.hidden = false;
+        stopButton.disabled = false;
+        setStatus("Recording. The microphone will stop automatically after 60 seconds.");
+      } catch (error) {
+        stopMicrophoneTracks();
+        showReadyState();
+        setStatus(describePermissionError(error), "error");
+      }
+    }
+
+    function deleteRecording() {
+      if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.ondataavailable = null;
+        mediaRecorder.onstop = null;
+        mediaRecorder.stop();
+        mediaRecorder = null;
+      }
+
+      clearRecording();
+      showReadyState();
+      setStatus("Recording and transcription deleted. The microphone is off.");
+    }
+
+    function responseErrorMessage(code) {
+      const messages = {
+        missing_api_key: "Transcription is unavailable because OPENAI_API_KEY is not configured on the server.",
+        empty_recording: "The recording was empty or invalid. Record a new clip and try again.",
+        no_speech_detected: "No speech was detected. Check the microphone input and try again in a standard browser.",
+        invalid_recording: "OpenAI could not decode this recording. Record again in a standard browser such as Chrome or Edge.",
+        unsupported_audio_format: "The server does not support this audio format. Record again in a supported browser.",
+        recording_too_large: "The recording was too large to transcribe.",
+        invalid_api_key: "OpenAI rejected the server API key. Check OPENAI_API_KEY in .env.local and restart the server.",
+        openai_quota_exceeded: "OpenAI rejected the request because the account has no available API quota or billing credit.",
+        openai_network_failure: "Network failure while the server contacted OpenAI. Check the connection and try again.",
+        openai_api_failure: "OpenAI could not transcribe the recording. Check the backend terminal for the safe error category."
+      };
+
+      return messages[code] || "The transcription request failed. Try again.";
+    }
+
+    async function transcribeRecording() {
+      if (!recordingBlob || recordingBlob.size === 0) {
+        setStatus("The recording was empty or invalid. Record a new clip before transcription.", "error");
+        return;
+      }
+
+      transcribeButton.disabled = true;
+      deleteButton.disabled = true;
+      recordAgainButton.disabled = true;
+      transcriptionResult.hidden = true;
+      transcript.textContent = "";
+      setStatus("Transcribing recording...");
+
+      try {
+        const response = await fetch("/api/transcribe", {
+          method: "POST",
+          headers: {
+            "Content-Type": recordingBlob.type
+          },
+          body: recordingBlob
+        });
+
+        if (!response.ok) {
+          let errorCode = "";
+          try {
+            const errorPayload = await response.json();
+            errorCode = errorPayload.code || "";
+          } catch {
+            errorCode = "";
+          }
+          setStatus(responseErrorMessage(errorCode), "error");
+          return;
+        }
+
+        const transcriptText = (await response.text()).trim();
+        if (!transcriptText) {
+          setStatus("The recording was empty, invalid, or contained no detectable speech.", "error");
+          return;
+        }
+
+        transcript.textContent = transcriptText;
+        transcriptionResult.hidden = false;
+        setStatus("Transcription successful.", "success");
+      } catch {
+        if (window.location.protocol === "file:") {
+          setStatus("This page was opened as a file and cannot reach the backend. Start server.cjs and open http://127.0.0.1:4173 instead.", "error");
+        } else {
+          setStatus(`Cannot reach the backend at ${window.location.origin}. Start server.cjs and keep its terminal open.`, "error");
+        }
+      } finally {
+        transcribeButton.disabled = false;
+        deleteButton.disabled = false;
+        recordAgainButton.disabled = false;
+      }
+    }
+
+    function cleanup() {
+      if (cleaningUp) {
+        return;
+      }
+
+      cleaningUp = true;
+      clearTimers();
+      if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.ondataavailable = null;
+        mediaRecorder.onstop = null;
+        mediaRecorder.stop();
+      }
+      mediaRecorder = null;
+      stopMicrophoneTracks();
+      revokeRecordingUrl();
+      recordingBlob = null;
+      recordedChunks = [];
+    }
+
+    startButton.addEventListener("click", startRecording);
+    stopButton.addEventListener("click", stopRecording);
+    deleteButton.addEventListener("click", deleteRecording);
+    recordAgainButton.addEventListener("click", startRecording);
+    transcribeButton.addEventListener("click", transcribeRecording);
+    window.addEventListener("pagehide", cleanup, { once: true });
+
+    if (window.location.protocol === "file:") {
+      startButton.disabled = true;
+      setStatus("This page was opened as a file. Run node microphone-test/server.cjs, then open http://127.0.0.1:4173.", "error");
+    }
+
+    const removalObserver = new MutationObserver(() => {
+      if (!root.isConnected) {
+        cleanup();
+        removalObserver.disconnect();
+      }
+    });
+    removalObserver.observe(document.body, { childList: true, subtree: true });
+  </script>
+</body>
+</html>

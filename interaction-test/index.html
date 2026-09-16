@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Another Me Interaction Test</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <main id="app" class="app-shell">
+    <header class="test-header">
+      <p class="eyebrow">Another Me technical prototype</p>
+      <h1>Interaction Test</h1>
+      <p>This test examines source labels, uncertainty language, gradual questions, and disclosure controls.</p>
+    </header>
+
+    <nav class="session-controls" aria-label="Session controls">
+      <button type="button" id="viewDataButton">View My Data</button>
+      <button type="button" id="deleteSessionButton" class="danger-button">Delete Session</button>
+      <button type="button" id="endExperienceButton">End Experience</button>
+    </nav>
+
+    <section class="progress-panel" aria-labelledby="progressHeading">
+      <div class="progress-heading">
+        <h2 id="progressHeading">Experience progress</h2>
+        <p id="emotionProgress"></p>
+      </div>
+      <ol id="progressList" class="progress-list"></ol>
+    </section>
+
+    <section id="stageContent" class="stage-panel" aria-live="polite"></section>
+
+    <p id="globalStatus" class="status" role="status" aria-live="polite">Stage 1 is ready.</p>
+
+    <nav id="stageNavigation" class="stage-navigation" aria-label="Stage navigation">
+      <button type="button" id="backButton">Back</button>
+      <button type="button" id="continueButton" class="primary-button">Continue</button>
+      <button type="button" id="skipButton">Skip</button>
+    </nav>
+  </main>
+
+  <dialog id="dataDialog" class="data-dialog" aria-labelledby="dataDialogTitle">
+    <div class="dialog-header">
+      <h2 id="dataDialogTitle">My Temporary Session Data</h2>
+      <button type="button" id="closeDataButton" aria-label="Close data view">Close</button>
+    </div>
+    <p>All items shown here exist only in browser memory for this session.</p>
+    <div id="dataDialogContent"></div>
+  </dialog>
+
+  <dialog id="correctionDialog" class="correction-dialog" aria-labelledby="correctionTitle">
+    <form id="correctionForm" method="dialog">
+      <h2 id="correctionTitle">Correct This Output</h2>
+      <p>The original AI output will remain visible beside your correction.</p>
+      <label for="correctionText">Your correction</label>
+      <textarea id="correctionText" rows="5" required></textarea>
+      <div class="controls">
+        <button type="button" id="cancelCorrectionButton">Cancel</button>
+        <button type="submit" class="primary-button">Save Correction</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>
