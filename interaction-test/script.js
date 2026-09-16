@@ -175,6 +175,7 @@ function createInterfaceState() {
     stageFourComplete: false,
     conversationMode: false,
     questionRecording: false,
+    questionTranscriptionEnabled: false,
     stageSixDisclosureAccepted: false,
     showFeedback: false,
     completed: false,
@@ -195,6 +196,17 @@ function escapeHtml(value) {
 function truncate(value, length = 90) {
   const normalized = String(value || "").replace(/\s+/g, " ").trim();
   return normalized.length > length ? `${normalized.slice(0, length - 1)}…` : normalized;
+}
+
+function getQuestionResponseState(question) {
+  const text = participantData.answers[question.id].trim();
+  const recording = participantData.answerRecordings[question.id] || null;
+  return {
+    text,
+    recording,
+    answered: Boolean(text || recording),
+    voiceOnly: Boolean(recording && !text)
+  };
 }
 
 function renderSourceLabel(type, detail = "", basedOn = [], isMock = false) {
@@ -395,20 +407,27 @@ function renderStageThree() {
     const index = interfaceState.stageThreeQuestion;
     const question = identityQuestions[index];
     const answerRecording = participantData.answerRecordings[question.id];
+    const answerText = participantData.answers[question.id].trim();
+    const speechRecognitionAvailable = supportsSpeechRecognition();
     const recordingControls = interfaceState.questionRecording ? `
       <p class="timer">Listening: <output id="questionRecordingTimer">00:00</output> / 00:45</p>
+      <p class="small-note">${interfaceState.questionTranscriptionEnabled ? "Speech-to-text is on." : "Recording audio only."}</p>
       <button type="button" data-action="stop-question-recording" class="primary-button">Done Speaking</button>
-    ` : '<button type="button" data-action="start-question-recording">Speak Answer</button>';
+    ` : speechRecognitionAvailable ? `
+      <button type="button" data-action="start-question-recording">Speak and Transcribe</button>
+      <button type="button" data-action="start-question-audio-only">Record Audio Only</button>
+    ` : '<button type="button" data-action="start-question-audio-only">Record Voice Answer</button>';
     const playback = answerRecording ? `
       <div class="source-card">
         ${renderSourceLabel("supplied", `SUPPLIED BY YOU — ${question.title.toUpperCase()} VOICE ANSWER`)}
         <audio controls preload="metadata" src="${answerRecording.url}"></audio>
+        <p class="voice-answer-state"><strong>This recording counts as an answered question.</strong> ${answerText ? "Editable answer text is available above." : "No transcript was captured, so the prototype will not guess what you said."}</p>
         <button type="button" data-action="delete-question-recording" data-question-id="${question.id}" class="danger-button">Delete Voice Answer</button>
       </div>
     ` : "";
-    const localRecognition = supportsOnDeviceRecognition()
-      ? "This browser exposes an on-device speech option. When its language support is available, recognised words will appear here for you to review."
-      : "This browser does not expose on-device speech recognition. Your audio will still be recorded locally; type a short summary if you want its meaning included in the mock profile.";
+    const speechNotice = speechRecognitionAvailable
+      ? "Speak and Transcribe uses your browser's speech-recognition service to create editable text. Depending on the browser, speech may be sent to its provider for processing. Choose Record Audio Only to avoid browser transcription."
+      : "Speech-to-text is unavailable in this browser. Your audio will still count as an answer, but type a short summary if you want its meaning included in the mock profile.";
 
     return `
       ${renderStageHeading(stages[2])}
@@ -426,7 +445,7 @@ function renderStageThree() {
         <div class="answer-methods">
           <label for="identityAnswer">Type your answer, or speak and review the words captured here</label>
           <textarea id="identityAnswer" data-question-id="${question.id}" rows="6" placeholder="Type, speak, or use both. You can edit the answer before moving on.">${escapeHtml(participantData.answers[question.id])}</textarea>
-          <p class="small-note">${escapeHtml(localRecognition)}</p>
+          <p class="speech-disclosure">${escapeHtml(speechNotice)}</p>
           <div class="controls">${recordingControls}</div>
           ${playback}
         </div>
@@ -439,16 +458,28 @@ function renderStageThree() {
     `;
   }
 
-  const answeredCount = Object.values(participantData.answers).filter((answer) => answer.trim()).length;
+  const responseStates = identityQuestions.map(getQuestionResponseState);
+  const answeredCount = responseStates.filter((response) => response.answered).length;
+  const voiceOnlyCount = responseStates.filter((response) => response.voiceOnly).length;
   const profileInferences = aiGeneratedData.inferences.filter((item) => item.id !== "image_inference");
   const inferenceCards = profileInferences.length
     ? profileInferences.map(renderInferenceCard).join("")
-    : '<p class="empty-state">No interpretation was generated because every question was skipped.</p>';
+    : answeredCount
+      ? '<p class="empty-state">Your voice answers were counted, but no readable answer text was available. The prototype did not invent interpretations of words it could not read.</p>'
+      : '<p class="empty-state">No interpretation was generated because every question was skipped.</p>';
+  const voiceOnlyNotice = voiceOnlyCount ? `
+    <article class="source-card voice-only-summary">
+      ${renderSourceLabel("supplied", "SUPPLIED BY YOU — VOICE ANSWERS")}
+      <p><strong>${voiceOnlyCount} voice ${voiceOnlyCount === 1 ? "answer was" : "answers were"} recorded and counted.</strong></p>
+      <p>No transcript was captured for ${voiceOnlyCount === 1 ? "this answer" : "these answers"}, so their meaning was not used for content-based interpretations.</p>
+    </article>
+  ` : "";
 
   return `
     ${renderStageHeading(stages[2])}
     <p>Based on what you chose to share, these temporary statements may or may not fit. I may be wrong.</p>
-    <p class="small-note">${answeredCount} of 3 questions answered.</p>
+    <p class="small-note">${answeredCount} of 3 questions answered${voiceOnlyCount ? ` (${voiceOnlyCount} by voice without transcript)` : ""}.</p>
+    ${voiceOnlyNotice}
     ${inferenceCards}
     <div class="controls">
       <button type="button" data-action="review-questions">Review Questions</button>
@@ -800,6 +831,7 @@ function generatePrediction(index = interfaceState.stageFourQuestion) {
   const evidence = identityQuestions
     .filter((question) => participantData.answers[question.id].trim())
     .map((question) => question.title);
+  const hasVoiceOnlyEvidence = identityQuestions.some((question) => getQuestionResponseState(question).voiceOnly);
   if (participantData.transcript.trim()) evidence.unshift("image story");
 
   aiGeneratedData.predictions = aiGeneratedData.predictions.filter((item) => item.id !== question.id);
@@ -807,7 +839,9 @@ function generatePrediction(index = interfaceState.stageFourQuestion) {
     id: question.id,
     text: `Based on what you shared, ${question.prediction} This is still a guess, and the details of the situation may change your choice.`,
     confidence: evidence.length >= 3 ? "Medium" : "Low",
-    basedOn: evidence.length ? evidence : ["no prior participant response; evidence is insufficient"],
+    basedOn: evidence.length
+      ? evidence
+      : [hasVoiceOnlyEvidence ? "voice answers supplied but unavailable as text; evidence is insufficient" : "no prior participant response; evidence is insufficient"],
     correction: ""
   });
   participantData.predictionAnswers[question.id] = "";
@@ -1126,17 +1160,12 @@ function deleteRecording(shouldRender = true) {
   }
 }
 
-function supportsOnDeviceRecognition() {
+function supportsSpeechRecognition() {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!Recognition) return false;
-  try {
-    return "processLocally" in new Recognition();
-  } catch {
-    return false;
-  }
+  return Boolean(Recognition);
 }
 
-async function startQuestionRecording() {
+async function startQuestionRecording(enableTranscription = true) {
   if (currentStage !== 2 || interfaceState.stageThreeComplete) return;
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
     setStatus("Voice answers are not supported in this browser. You can still type your answer.", "error");
@@ -1150,6 +1179,7 @@ async function startQuestionRecording() {
   const question = identityQuestions[interfaceState.stageThreeQuestion];
   const token = ++questionRecordingToken;
   interfaceState.questionRecording = true;
+  interfaceState.questionTranscriptionEnabled = Boolean(enableTranscription && supportsSpeechRecognition());
   renderApp();
   setStatus("Waiting for microphone permission...");
 
@@ -1174,10 +1204,16 @@ async function startQuestionRecording() {
     updateQuestionRecordingTimer();
     questionRecordingTimerId = window.setInterval(updateQuestionRecordingTimer, 250);
     questionRecordingLimitId = window.setTimeout(() => stopQuestionRecording(), 45_000);
-    startLocalSpeechRecognition(question.id);
-    setStatus("Listening. Say your answer naturally, then choose Done Speaking.", "success");
+    if (interfaceState.questionTranscriptionEnabled) startQuestionSpeechRecognition(question.id);
+    setStatus(
+      interfaceState.questionTranscriptionEnabled
+        ? "Listening and creating editable text. Say your answer naturally, then choose Done Speaking."
+        : "Recording your voice answer. It will count even without a transcript.",
+      "success"
+    );
   } catch (error) {
     interfaceState.questionRecording = false;
+    interfaceState.questionTranscriptionEnabled = false;
     interfaceState.conversationMode = false;
     stopQuestionMicrophoneTracks();
     renderApp();
@@ -1190,14 +1226,13 @@ async function startQuestionRecording() {
   }
 }
 
-function startLocalSpeechRecognition(questionId) {
-  if (!supportsOnDeviceRecognition()) return;
+function startQuestionSpeechRecognition(questionId) {
+  if (!supportsSpeechRecognition()) return;
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   questionRecognition = new Recognition();
   questionRecognition.lang = navigator.language || "en-US";
   questionRecognition.continuous = true;
   questionRecognition.interimResults = true;
-  questionRecognition.processLocally = true;
   recognitionBaseText = participantData.answers[questionId].trim();
   recognitionFinalText = "";
   questionRecognition.addEventListener("result", (event) => {
@@ -1214,7 +1249,7 @@ function startLocalSpeechRecognition(questionId) {
   });
   questionRecognition.addEventListener("error", (event) => {
     if (event.error !== "aborted") {
-      setStatus("On-device speech-to-text is unavailable, but the audio recording is still continuing. You can type a summary afterward.");
+      setStatus("Speech-to-text did not produce a transcript, but the audio recording is still continuing and will count as your answer. You can type a summary afterward.");
     }
   });
   try {
@@ -1234,12 +1269,13 @@ function updateQuestionRecordingTimer() {
 function stopQuestionRecording(advanceAfterStop = false) {
   pendingQuestionAdvance = advanceAfterStop;
   clearQuestionRecordingTimers();
-  stopLocalSpeechRecognition();
+  stopQuestionSpeechRecognition();
   if (questionMediaRecorder?.state === "recording") {
     questionMediaRecorder.stop();
   } else {
     questionRecordingToken += 1;
     interfaceState.questionRecording = false;
+    interfaceState.questionTranscriptionEnabled = false;
     stopQuestionMicrophoneTracks();
     if (pendingQuestionAdvance) advanceIdentityQuestion();
     else renderApp();
@@ -1262,6 +1298,7 @@ function finalizeQuestionRecording(token, questionId) {
     };
   }
   interfaceState.questionRecording = false;
+  interfaceState.questionTranscriptionEnabled = false;
   questionMediaRecorder = null;
   questionRecordedChunks = [];
   stopQuestionMicrophoneTracks();
@@ -1270,7 +1307,15 @@ function finalizeQuestionRecording(token, questionId) {
   if (shouldAdvance) advanceIdentityQuestion();
   else {
     renderApp();
-    setStatus(blob.size ? "Voice answer recorded. Review it or edit the written answer." : "The voice answer was empty. Please try again.", blob.size ? "success" : "error");
+    const hasAnswerText = Boolean(participantData.answers[questionId].trim());
+    setStatus(
+      blob.size
+        ? hasAnswerText
+          ? "Voice answer recorded and counted. Review the editable text before moving on."
+          : "Voice answer recorded and counted. No transcript was captured, so you can optionally type a summary."
+        : "The voice answer was empty. Please try again.",
+      blob.size ? "success" : "error"
+    );
   }
 }
 
@@ -1279,12 +1324,21 @@ function advanceIdentityQuestion() {
     interfaceState.stageThreeQuestion += 1;
     renderApp();
     setStatus(`${identityQuestions[interfaceState.stageThreeQuestion].title} is ready.`);
-    if (interfaceState.conversationMode) window.setTimeout(startQuestionRecording, 300);
+    if (interfaceState.conversationMode) window.setTimeout(() => startQuestionRecording(true), 300);
   } else {
     buildInferences();
     interfaceState.stageThreeComplete = true;
     renderApp();
-    setStatus("Temporary mock profile generated. Review each interpretation.", "success");
+    const hasReadableQuestionAnswer = identityQuestions.some((question) => participantData.answers[question.id].trim());
+    const hasRecordedQuestionAnswer = identityQuestions.some((question) => participantData.answerRecordings[question.id]);
+    setStatus(
+      hasReadableQuestionAnswer || participantData.transcript.trim()
+        ? "Temporary mock profile generated. Review each interpretation."
+        : hasRecordedQuestionAnswer
+          ? "Voice answers counted. No content-based profile was generated because no transcript was available."
+          : "No profile was generated because every question was skipped.",
+      hasRecordedQuestionAnswer || hasReadableQuestionAnswer ? "success" : "info"
+    );
   }
 }
 
@@ -1305,7 +1359,7 @@ function clearQuestionRecordingTimers() {
   questionRecordingLimitId = null;
 }
 
-function stopLocalSpeechRecognition() {
+function stopQuestionSpeechRecognition() {
   if (!questionRecognition) return;
   try {
     questionRecognition.stop();
@@ -1334,7 +1388,7 @@ function cleanupActiveMedia() {
   stopMicrophoneTracks();
   questionRecordingToken += 1;
   clearQuestionRecordingTimers();
-  stopLocalSpeechRecognition();
+  stopQuestionSpeechRecognition();
   if (questionMediaRecorder?.state === "recording") questionMediaRecorder.stop();
   questionMediaRecorder = null;
   questionRecordedChunks = [];
@@ -1484,12 +1538,16 @@ function handleStageAction(action, button) {
   else if (action === "stop-recording") stopRecording();
   else if (action === "record-again") startRecording();
   else if (action === "delete-recording") deleteRecording();
-  else if (action === "start-question-recording") startQuestionRecording();
+  else if (action === "start-question-recording") startQuestionRecording(true);
+  else if (action === "start-question-audio-only") {
+    interfaceState.conversationMode = false;
+    startQuestionRecording(false);
+  }
   else if (action === "stop-question-recording") stopQuestionRecording();
   else if (action === "delete-question-recording") deleteQuestionRecording(button.dataset.questionId);
   else if (action === "toggle-conversation-mode") {
     interfaceState.conversationMode = !interfaceState.conversationMode;
-    if (interfaceState.conversationMode && !interfaceState.questionRecording) startQuestionRecording();
+    if (interfaceState.conversationMode && !interfaceState.questionRecording) startQuestionRecording(true);
     else {
       renderApp();
       setStatus("Conversation Mode turned off. You can still speak or type each answer.");

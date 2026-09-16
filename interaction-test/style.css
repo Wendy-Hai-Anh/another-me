@@ -363,6 +363,25 @@ textarea {
   border-top: 1px solid #e2e7eb;
 }
 
+.speech-disclosure,
+.voice-answer-state {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-left: 4px solid var(--transcribed);
+  background: #f1f6fb;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.voice-answer-state {
+  border-left-color: var(--supplied);
+  background: #f0f8f5;
+}
+
+.voice-only-summary {
+  border-left: 4px solid var(--supplied);
+}
+
 .conversation-mode {
   margin: 14px 0;
   padding: 12px;
