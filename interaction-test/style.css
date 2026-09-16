@@ -357,6 +357,39 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+.answer-methods {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #e2e7eb;
+}
+
+.conversation-mode {
+  margin: 14px 0;
+  padding: 12px;
+  border-left: 4px solid var(--transcribed);
+  background: #f1f6fb;
+}
+
+.conversation-mode.active {
+  border-left-color: var(--supplied);
+  background: #f0f8f5;
+}
+
+.scenario-progress {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-weight: bold;
+}
+
+.prediction-summary {
+  display: grid;
+  gap: 12px;
+}
+
+.prediction-summary .source-card {
+  margin: 0;
+}
+
 .choice-button[aria-pressed="true"] {
   border-color: var(--primary);
   box-shadow: inset 0 0 0 2px var(--primary);

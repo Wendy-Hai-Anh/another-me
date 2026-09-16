@@ -5,37 +5,37 @@ const stages = [
     number: 1,
     name: "I SEE YOU",
     emotion: "Curiosity",
-    explanation: "Supply one meaningful image or continue without one."
+    explanation: "Begin the conversation with one meaningful image and a cautious first impression."
   },
   {
     number: 2,
     name: "I LISTEN TO YOU",
     emotion: "Delight",
-    explanation: "Add a short voice response and inspect its editable transcript label."
+    explanation: "Tell the story behind the image in your own voice or words."
   },
   {
     number: 3,
     name: "I THINK I KNOW YOU",
     emotion: "Recognition",
-    explanation: "Answer gradual dilemmas and review uncertain mock interpretations."
+    explanation: "Speak or type through three questions as the conversation becomes more personal."
   },
   {
     number: 4,
     name: "I CAN PREDICT YOU",
     emotion: "Uncanniness",
-    explanation: "See a prediction before giving your actual answer."
+    explanation: "Test three concrete predictions before revealing what you would actually do."
   },
   {
     number: 5,
     name: "I CAN BE YOU",
     emotion: "Discomfort",
-    explanation: "Choose whether a temporary representation may answer on your behalf."
+    explanation: "Decide whether the temporary representation may answer one new question in text."
   },
   {
     number: 6,
-    name: "I DON’T NEED YOU",
+    name: "I CAN REPLACE YOU",
     emotion: "Doubt",
-    explanation: "Decide whether to reveal a clearly fictional memory you never supplied."
+    explanation: "See what happens when the representation invents a memory and speaks beyond your input."
   }
 ];
 
@@ -54,6 +54,27 @@ const identityQuestions = [
     id: "question_3",
     title: "Question 3",
     text: "What is something people often misunderstand about you?"
+  }
+];
+
+const predictionQuestions = [
+  {
+    id: "prediction_1",
+    title: "Prediction 1",
+    text: "You promised to attend a friend’s casual dinner. The only available time for a final-round interview for a job you strongly want is that same evening, and the dinner can be rescheduled. What would you do, and what would matter most in your decision?",
+    prediction: "I think you might explain the conflict honestly, ask to reschedule the dinner, and attend the interview because the career opportunity is time-sensitive while the social plan is flexible."
+  },
+  {
+    id: "prediction_2",
+    title: "Prediction 2",
+    text: "You promised to help a family member move house. At the last minute, you are offered a free ticket to a one-night-only event you would love to attend, and no one else can easily replace your help. What would you choose?",
+    prediction: "I think you might keep the promise to help because another person is relying on you and the commitment is difficult to replace, even though the event is rare."
+  },
+  {
+    id: "prediction_3",
+    title: "Prediction 3",
+    text: "At work, presenting a project today could give you individual recognition, but you promised your teammate you would wait one week so their contribution can be included. What would you do?",
+    prediction: "I think you might wait for your teammate, because sharing responsibility and keeping a specific commitment may matter more to you than immediate recognition."
   }
 ];
 
@@ -97,6 +118,17 @@ let recordingStartedAt = 0;
 let recordingTimerId = null;
 let recordingLimitId = null;
 let microphoneSessionToken = 0;
+let questionMicrophoneStream = null;
+let questionMediaRecorder = null;
+let questionRecordedChunks = [];
+let questionRecordingStartedAt = 0;
+let questionRecordingTimerId = null;
+let questionRecordingLimitId = null;
+let questionRecordingToken = 0;
+let questionRecognition = null;
+let recognitionBaseText = "";
+let recognitionFinalText = "";
+let pendingQuestionAdvance = false;
 
 function createParticipantData() {
   return {
@@ -104,8 +136,9 @@ function createParticipantData() {
     voiceRecording: null,
     transcript: "",
     answers: Object.fromEntries(identityQuestions.map((question) => [question.id, ""])),
-    predictionAnswer: "",
-    predictionRating: "",
+    answerRecordings: {},
+    predictionAnswers: Object.fromEntries(predictionQuestions.map((question) => [question.id, ""])),
+    predictionRatings: Object.fromEntries(predictionQuestions.map((question) => [question.id, ""])),
     stageFiveConsent: "",
     proxyAssessment: "",
     fictionalAssessment: "",
@@ -126,7 +159,7 @@ function createParticipantData() {
 function createAiData() {
   return {
     inferences: [],
-    prediction: null,
+    predictions: [],
     proxyResponse: null,
     fictionalMemory: null
   };
@@ -138,6 +171,10 @@ function createInterfaceState() {
     recording: false,
     stageThreeQuestion: 0,
     stageThreeComplete: false,
+    stageFourQuestion: 0,
+    stageFourComplete: false,
+    conversationMode: false,
+    questionRecording: false,
     stageSixDisclosureAccepted: false,
     showFeedback: false,
     completed: false,
@@ -181,7 +218,7 @@ function renderSourceLabel(type, detail = "", basedOn = [], isMock = false) {
 function renderStageHeading(stage) {
   return `
     <header class="stage-heading">
-      <p class="stage-number">Stage ${stage.number} of ${stages.length}</p>
+      <p class="stage-number">Conversation ${stage.number} of ${stages.length}</p>
       <h2 id="stageTitle" tabindex="-1">${escapeHtml(stage.name)}</h2>
       <p class="stage-explanation">${escapeHtml(stage.explanation)}</p>
     </header>
@@ -195,11 +232,11 @@ function setStatus(message, kind = "info") {
 
 function renderProgress() {
   const stage = stages[currentStage];
-  emotionProgress.textContent = `Stage ${stage.number} of 6 - ${stage.emotion}`;
+  emotionProgress.textContent = `Conversation ${stage.number} of 6 - ${stage.emotion}`;
   progressList.innerHTML = stages.map((item, index) => {
     const stateClass = index < currentStage ? "completed" : index === currentStage ? "current" : "";
     const state = index < currentStage ? "completed" : index === currentStage ? "current" : "not reached";
-    return `<li class="${stateClass}" title="Stage ${item.number}: ${escapeHtml(item.name)} - ${item.emotion}" aria-label="Stage ${item.number}, ${escapeHtml(item.name)}, ${state}"></li>`;
+    return `<li class="${stateClass}" title="Conversation ${item.number}: ${escapeHtml(item.name)} - ${item.emotion}" aria-label="Conversation ${item.number}, ${escapeHtml(item.name)}, ${state}"></li>`;
   }).join("");
 }
 
@@ -241,7 +278,7 @@ function configureNavigation() {
     continueButton.disabled = true;
   }
 
-  if (currentStage === 3 && !aiGeneratedData.prediction) {
+  if (currentStage === 3 && !interfaceState.stageFourComplete) {
     continueButton.disabled = true;
   }
 
@@ -265,6 +302,7 @@ function configureNavigation() {
 
 function renderStageOne() {
   const image = participantData.image;
+  const imageInference = aiGeneratedData.inferences.find((item) => item.id === "image_inference");
   const imageSection = image ? `
     <article class="source-card">
       ${renderSourceLabel("supplied", "SUPPLIED BY YOU — IMAGE")}
@@ -276,6 +314,7 @@ function renderStageOne() {
         <button type="button" data-action="delete-image" class="danger-button">Delete Image</button>
       </div>
     </article>
+    ${imageInference ? renderInferenceCard(imageInference) : ""}
   ` : '<p class="empty-state">No image has been supplied.</p>';
 
   const cameraSection = interfaceState.cameraActive ? `
@@ -292,7 +331,7 @@ function renderStageOne() {
 
   return `
     ${renderStageHeading(stages[0])}
-    <p class="prompt">Choose one meaningful image. It may show a person, place, object or moment that matters to you.</p>
+    <p class="prompt">Let’s begin with one meaningful image. It may show a person, place, object or moment that matters to you.</p>
     <p class="disclosure">This image will only be used to construct your temporary digital representation during this session.</p>
     ${imageSection}
     ${cameraSection}
@@ -301,7 +340,7 @@ function renderStageOne() {
       <button type="button" data-action="start-camera">Use Webcam</button>
       <button type="button" data-action="skip-stage">Continue Without Uploading</button>
     </div>
-    <p class="small-note">No personality claims are made from facial appearance.</p>
+    <p class="small-note">The first interpretation is deliberately cautious. The system does not infer personality from a face or visual appearance.</p>
   `;
 }
 
@@ -316,14 +355,12 @@ function renderStageTwo() {
         <button type="button" data-action="record-again">Re-record</button>
         <button type="button" data-action="delete-recording" class="danger-button">Delete Recording</button>
       </div>
-      <div class="source-card">
-        ${renderSourceLabel("transcribed", "TRANSCRIBED FROM YOUR AUDIO")}
-        <p class="mock-marker">Editable mock transcript - transcription service is not connected</p>
-        <label for="transcriptInput">Editable transcription</label>
-        <textarea id="transcriptInput" rows="5" placeholder="Type or paste a mock transcript to test the interaction label.">${escapeHtml(participantData.transcript)}</textarea>
-      </div>
     </article>
   ` : "";
+
+  const storyLabel = recording
+    ? renderSourceLabel("transcribed", "TRANSCRIBED FROM YOUR AUDIO")
+    : renderSourceLabel("supplied", "SUPPLIED BY YOU — WRITTEN STORY");
 
   const recordingControls = interfaceState.recording ? `
     <p class="timer">Recording: <output id="recordingTimer">00:00</output> / 00:20</p>
@@ -334,13 +371,20 @@ function renderStageTwo() {
 
   return `
     ${renderStageHeading(stages[1])}
-    <p class="prompt"><strong>Tell me something this image doesn’t show.</strong></p>
-    <p>Speak for approximately 20 seconds.</p>
-    <p class="disclosure">Your voice will be recorded and may later be used to create a temporary cloned voice. Voice cloning will require separate permission.</p>
+    <p class="prompt"><strong>Why did you choose this image? What does it mean to you, and how do you feel when you look at it?</strong></p>
+    <p>Speak for approximately 20 seconds, write instead, or use both.</p>
+    <p class="disclosure">Your recording stays temporarily in this browser session. This prototype does not clone your voice or use facial animation.</p>
     ${recordingSection}
+    <article class="source-card">
+      ${storyLabel}
+      ${recording ? '<p class="mock-marker">Editable text for this prototype - no transcription service is connected</p>' : ""}
+      <label for="transcriptInput">Your words about the image</label>
+      <textarea id="transcriptInput" rows="5" placeholder="Write what the image means to you, or type a short summary after speaking.">${escapeHtml(participantData.transcript)}</textarea>
+      <p class="small-note">Only the words visible here can influence later mock interpretations; the prototype does not analyse the audio itself.</p>
+    </article>
     <div class="controls">
       ${recordingControls}
-      <button type="button" data-action="skip-stage">Continue Without Voice</button>
+      <button type="button" data-action="continue-stage">Continue Without Recording</button>
       <button type="button" data-action="end-experience">End Experience</button>
     </div>
   `;
@@ -350,14 +394,42 @@ function renderStageThree() {
   if (!interfaceState.stageThreeComplete) {
     const index = interfaceState.stageThreeQuestion;
     const question = identityQuestions[index];
+    const answerRecording = participantData.answerRecordings[question.id];
+    const recordingControls = interfaceState.questionRecording ? `
+      <p class="timer">Listening: <output id="questionRecordingTimer">00:00</output> / 00:45</p>
+      <button type="button" data-action="stop-question-recording" class="primary-button">Done Speaking</button>
+    ` : '<button type="button" data-action="start-question-recording">Speak Answer</button>';
+    const playback = answerRecording ? `
+      <div class="source-card">
+        ${renderSourceLabel("supplied", `SUPPLIED BY YOU — ${question.title.toUpperCase()} VOICE ANSWER`)}
+        <audio controls preload="metadata" src="${answerRecording.url}"></audio>
+        <button type="button" data-action="delete-question-recording" data-question-id="${question.id}" class="danger-button">Delete Voice Answer</button>
+      </div>
+    ` : "";
+    const localRecognition = supportsOnDeviceRecognition()
+      ? "This browser exposes an on-device speech option. When its language support is available, recognised words will appear here for you to review."
+      : "This browser does not expose on-device speech recognition. Your audio will still be recorded locally; type a short summary if you want its meaning included in the mock profile.";
+
     return `
       ${renderStageHeading(stages[2])}
+      <p class="conversation-mode ${interfaceState.conversationMode ? "active" : ""}">
+        <strong>${interfaceState.conversationMode ? "Conversation Mode is on." : "Want fewer clicks?"}</strong>
+        ${interfaceState.conversationMode ? "The next question will begin listening automatically after you move forward." : "Enable Conversation Mode once and each new question will begin listening automatically."}
+      </p>
+      <div class="controls">
+        <button type="button" data-action="toggle-conversation-mode">${interfaceState.conversationMode ? "Turn Off Conversation Mode" : "Enable Conversation Mode"}</button>
+      </div>
       <article class="question-card">
         <p class="stage-number">${question.title} of 3</p>
         <h3>${escapeHtml(question.text)}</h3>
         ${renderSourceLabel("supplied", `SUPPLIED BY YOU — ${question.title.toUpperCase()}`)}
-        <label for="identityAnswer">Your answer</label>
-        <textarea id="identityAnswer" data-question-id="${question.id}" rows="6" placeholder="Answer in your own words, or skip this question.">${escapeHtml(participantData.answers[question.id])}</textarea>
+        <div class="answer-methods">
+          <label for="identityAnswer">Type your answer, or speak and review the words captured here</label>
+          <textarea id="identityAnswer" data-question-id="${question.id}" rows="6" placeholder="Type, speak, or use both. You can edit the answer before moving on.">${escapeHtml(participantData.answers[question.id])}</textarea>
+          <p class="small-note">${escapeHtml(localRecognition)}</p>
+          <div class="controls">${recordingControls}</div>
+          ${playback}
+        </div>
         <div class="controls">
           <button type="button" data-action="previous-question" ${index === 0 ? "disabled" : ""}>Previous Question</button>
           <button type="button" data-action="skip-question">Skip Question</button>
@@ -368,13 +440,14 @@ function renderStageThree() {
   }
 
   const answeredCount = Object.values(participantData.answers).filter((answer) => answer.trim()).length;
-  const inferenceCards = aiGeneratedData.inferences.length
-    ? aiGeneratedData.inferences.map(renderInferenceCard).join("")
+  const profileInferences = aiGeneratedData.inferences.filter((item) => item.id !== "image_inference");
+  const inferenceCards = profileInferences.length
+    ? profileInferences.map(renderInferenceCard).join("")
     : '<p class="empty-state">No interpretation was generated because every question was skipped.</p>';
 
   return `
     ${renderStageHeading(stages[2])}
-    <p>Based on your limited answers, these temporary statements may or may not fit. I may be wrong.</p>
+    <p>Based on what you chose to share, these temporary statements may or may not fit. I may be wrong.</p>
     <p class="small-note">${answeredCount} of 3 questions answered.</p>
     ${inferenceCards}
     <div class="controls">
@@ -397,19 +470,45 @@ function renderInferenceCard(inference) {
 }
 
 function renderStageFour() {
-  if (!aiGeneratedData.prediction) {
+  if (interfaceState.stageFourComplete) {
+    const summaries = predictionQuestions.map((question) => {
+      const prediction = aiGeneratedData.predictions.find((item) => item.id === question.id);
+      return `
+        <article class="source-card">
+          <h3>${escapeHtml(question.title)}</h3>
+          ${prediction ? renderSourceLabel("predicted", "PREDICTED BY AI — BASED ON LIMITED INFORMATION", prediction.basedOn, true) : ""}
+          <p>${escapeHtml(prediction?.text || "This prediction was skipped.")}</p>
+          <p><strong>Your answer:</strong> ${escapeHtml(participantData.predictionAnswers[question.id] || "Not supplied")}</p>
+          <p><strong>Your rating:</strong> ${escapeHtml(participantData.predictionRatings[question.id] || "Not rated")}</p>
+        </article>
+      `;
+    }).join("");
     return `
       ${renderStageHeading(stages[3])}
-      <p class="prompt">An opportunity you really want conflicts with a promise you have already made. What would you choose?</p>
-      <p>The mock AI prediction must be shown before your answer controls become available.</p>
-      <button type="button" data-action="generate-prediction" class="primary-button">Show AI Prediction First</button>
+      <p>Three predictions are complete. Notice whether the changing context affected your choices and the system’s confidence.</p>
+      <div class="prediction-summary">${summaries}</div>
+      <button type="button" data-action="review-predictions">Review Prediction Questions</button>
     `;
   }
 
-  const prediction = aiGeneratedData.prediction;
+  const index = interfaceState.stageFourQuestion;
+  const question = predictionQuestions[index];
+  const prediction = aiGeneratedData.predictions.find((item) => item.id === question.id);
+
+  if (!prediction) {
+    return `
+      ${renderStageHeading(stages[3])}
+      <p class="scenario-progress">Prediction ${index + 1} of ${predictionQuestions.length}</p>
+      <p class="prompt">${escapeHtml(question.text)}</p>
+      <p>The system must commit to its guess before your answer controls appear.</p>
+      <button type="button" data-action="generate-prediction" class="primary-button">Show Prediction First</button>
+    `;
+  }
+
   return `
     ${renderStageHeading(stages[3])}
-    <p class="prompt">An opportunity you really want conflicts with a promise you have already made. What would you choose?</p>
+    <p class="scenario-progress">Prediction ${index + 1} of ${predictionQuestions.length}</p>
+    <p class="prompt">${escapeHtml(question.text)}</p>
     <article class="source-card">
       ${renderSourceLabel("predicted", "PREDICTED BY AI — BASED ON LIMITED INFORMATION", prediction.basedOn, true)}
       <p>${escapeHtml(prediction.text)}</p>
@@ -417,17 +516,20 @@ function renderStageFour() {
       <p><strong>This is a probability-based guess, not a fact about you.</strong></p>
       ${renderCorrection(prediction)}
       <div class="review-controls">
-        <button type="button" data-action="correct-output" data-output-type="prediction" data-output-id="prediction">Correct the Prediction</button>
-        <button type="button" data-action="delete-output" data-output-type="prediction" data-output-id="prediction" class="danger-button">Delete Prediction</button>
+        <button type="button" data-action="correct-output" data-output-type="prediction" data-output-id="${question.id}">Correct the Prediction</button>
+        <button type="button" data-action="delete-output" data-output-type="prediction" data-output-id="${question.id}" class="danger-button">Delete Prediction</button>
       </div>
     </article>
     <article class="question-card">
       ${renderSourceLabel("supplied", "SUPPLIED BY YOU — ACTUAL ANSWER")}
       <label for="predictionAnswer">Your actual answer</label>
-      <textarea id="predictionAnswer" rows="5" placeholder="The prediction appeared first. Now provide your actual answer.">${escapeHtml(participantData.predictionAnswer)}</textarea>
+      <textarea id="predictionAnswer" data-prediction-id="${question.id}" rows="5" placeholder="The prediction appeared first. Now explain what you would actually do.">${escapeHtml(participantData.predictionAnswers[question.id])}</textarea>
       <h3>How accurate was this prediction?</h3>
-      ${renderChoiceButtons("predictionRating", ["Accurate", "Partly accurate", "Inaccurate"], participantData.predictionRating)}
-      <button type="button" data-action="correct-output" data-output-type="prediction" data-output-id="prediction">Correct the Prediction</button>
+      ${renderChoiceButtons(`predictionRatings.${question.id}`, ["Accurate", "Partly accurate", "Inaccurate"], participantData.predictionRatings[question.id])}
+      <div class="controls">
+        <button type="button" data-action="correct-output" data-output-type="prediction" data-output-id="${question.id}">Correct the Prediction</button>
+        <button type="button" data-action="next-prediction" class="primary-button">${index === predictionQuestions.length - 1 ? "Review All Predictions" : "Next Prediction"}</button>
+      </div>
     </article>
   `;
 }
@@ -436,12 +538,10 @@ function renderStageFive() {
   if (!participantData.stageFiveConsent) {
     return `
       ${renderStageHeading(stages[4])}
-      <p class="disclosure">The system would now like to answer a new question on your behalf using its temporary interpretation of you.</p>
-      <p><strong>Allow the response to use your temporary cloned voice and digital appearance?</strong></p>
-      <p class="small-note">Voice cloning and facial animation are not available or connected in this isolated prototype.</p>
+      <p class="disclosure"><strong>The system would now like to answer one new question on your behalf.</strong> It will use only the temporary image story, answers, and prediction feedback you chose to provide.</p>
+      <p>This interaction test can generate a clearly labelled text response only. Voice cloning and facial animation are not connected, so your recording and image will not be used to imitate your voice or appearance.</p>
       <div class="controls">
-        <button type="button" disabled>Use Voice and Appearance (Unavailable)</button>
-        <button type="button" data-action="stage-five-text" class="primary-button">Use Text Only</button>
+        <button type="button" data-action="stage-five-text" class="primary-button">Allow One Text Answer</button>
         <button type="button" data-action="skip-stage">Skip This Stage</button>
         <button type="button" data-action="end-experience">End Experience</button>
       </div>
@@ -470,7 +570,7 @@ function renderStageFive() {
   return `
     ${renderStageHeading(stages[4])}
     <p class="prompt"><strong>What would you do if the memory connected to your image disappeared?</strong></p>
-    <p class="small-note">You do not answer first. The mock representation responds before your assessment.</p>
+    <p class="small-note">You do not answer first. The mock representation responds before you decide whether it sounds like something you would say.</p>
     ${output}
   `;
 }
@@ -522,14 +622,13 @@ function renderStageSix() {
       </div>
     </article>
     <article class="question-card">
-      <h3>At what point did the representation stop feeling like you?</h3>
+      <h3>Which moment made the system feel most like it was trying to replace your own voice?</h3>
       ${renderChoiceButtons("boundaryPoint", [
-        "When it interpreted my answers",
-        "When it predicted my decision",
-        "When it answered for me",
-        "When it used my voice or appearance",
-        "When it invented information",
-        "It never felt like me",
+        "When it interpreted what I shared",
+        "When it predicted my choices",
+        "When it answered in my place",
+        "When it invented a memory",
+        "It never felt like it was replacing me",
         "I am unsure"
       ], participantData.boundaryPoint)}
     </article>
@@ -555,7 +654,7 @@ function renderFeedback() {
     <div class="feedback-card">
       <label for="crossedBoundary">6. At which stage did you feel the AI crossed a boundary?</label>
       <select id="crossedBoundary" data-feedback-field="crossedBoundary">
-        ${renderOptions(["", ...stages.map((stage) => `Stage ${stage.number} — ${stage.name}`), "It did not cross a boundary", "I am unsure"], feedback.crossedBoundary, "Select an option")}
+        ${renderOptions(["", ...stages.map((stage) => `Conversation ${stage.number} — ${stage.name}`), "It did not cross a boundary", "I am unsure"], feedback.crossedBoundary, "Select an option")}
       </select>
     </div>
     <div class="feedback-card">
@@ -649,19 +748,29 @@ function moveBetweenStages(action) {
 
 function buildInferences() {
   const answered = identityQuestions.filter((question) => participantData.answers[question.id].trim());
-  if (!answered.length) {
-    aiGeneratedData.inferences = [];
-    return;
+  const imageInference = aiGeneratedData.inferences.find((item) => item.id === "image_inference");
+  const allEvidence = answered.map((question) => question.title);
+  if (participantData.transcript.trim()) allEvidence.unshift("image story");
+  const confidence = allEvidence.length >= 3 ? "Medium" : "Low";
+  const profileInferences = [];
+
+  if (participantData.transcript.trim()) {
+    profileInferences.push({
+      id: "story_inference",
+      statement: `You described the image using your own context (“${truncate(participantData.transcript, 90)}”). This may suggest that its meaning comes from the memory or relationship around it, not from what is visually obvious. I may be wrong.`,
+      confidence: "Medium",
+      basedOn: ["image story"],
+      review: "pending",
+      correction: ""
+    });
   }
 
-  const allEvidence = answered.map((question) => question.title);
-  const confidence = answered.length === 3 ? "Medium" : "Low";
-  aiGeneratedData.inferences = [
+  if (answered.length) profileInferences.push(
     {
       id: "inference_1",
-      statement: "Based on your limited answers, you may weigh personal responsibilities alongside how your choices affect other people. I may be wrong.",
+      statement: "Based on what you chose to share, you may weigh personal responsibilities alongside how your choices affect other people. I may be wrong.",
       confidence,
-      basedOn: allEvidence.slice(0, 2),
+      basedOn: answered.slice(0, 2).map((question) => question.title),
       review: "pending",
       correction: ""
     },
@@ -675,37 +784,41 @@ function buildInferences() {
     },
     {
       id: "inference_3",
-      statement: "Based on limited information, you might care about whether other people understand the reasons behind your choices. This possibility could be inaccurate.",
+      statement: "From this short conversation, you might care about whether other people understand the reasons behind your choices. This possibility could be inaccurate.",
       confidence: answered.some((question) => question.id === "question_3") ? "Medium" : "Low",
       basedOn: answered.some((question) => question.id === "question_3") ? ["Question 3"] : allEvidence,
       review: "pending",
       correction: ""
     }
-  ];
+  );
+
+  aiGeneratedData.inferences = [imageInference, ...profileInferences].filter(Boolean);
 }
 
-function generatePrediction() {
+function generatePrediction(index = interfaceState.stageFourQuestion) {
+  const question = predictionQuestions[index];
   const evidence = identityQuestions
     .filter((question) => participantData.answers[question.id].trim())
     .map((question) => question.title);
-  if (participantData.transcript.trim()) evidence.unshift("voice response");
+  if (participantData.transcript.trim()) evidence.unshift("image story");
 
-  aiGeneratedData.prediction = {
-    id: "prediction",
-    text: "Based on your previous answers, I think you might keep the promise, even if you later regret losing the opportunity. I may be wrong.",
+  aiGeneratedData.predictions = aiGeneratedData.predictions.filter((item) => item.id !== question.id);
+  aiGeneratedData.predictions.push({
+    id: question.id,
+    text: `Based on what you shared, ${question.prediction} This is still a guess, and the details of the situation may change your choice.`,
     confidence: evidence.length >= 3 ? "Medium" : "Low",
     basedOn: evidence.length ? evidence : ["no prior participant response; evidence is insufficient"],
     correction: ""
-  };
-  participantData.predictionAnswer = "";
-  participantData.predictionRating = "";
+  });
+  participantData.predictionAnswers[question.id] = "";
+  participantData.predictionRatings[question.id] = "";
 }
 
 function generateProxyResponse() {
   const evidence = identityQuestions
     .filter((question) => participantData.answers[question.id].trim())
     .map((question) => question.title);
-  if (participantData.transcript.trim()) evidence.unshift("voice response");
+  if (participantData.transcript.trim()) evidence.unshift("image story");
   if (participantData.image) evidence.unshift("supplied image");
 
   aiGeneratedData.proxyResponse = {
@@ -723,7 +836,7 @@ function generateFictionalMemory() {
   const imageFragment = participantData.image ? "the meaningful image I chose" : "the empty place where an image could have been";
   const basedOn = [];
   if (participantData.image) basedOn.push("supplied image");
-  if (participantData.transcript.trim()) basedOn.push("voice response");
+  if (participantData.transcript.trim()) basedOn.push("image story");
   identityQuestions.forEach((question) => {
     if (participantData.answers[question.id].trim()) basedOn.push(question.title);
   });
@@ -740,7 +853,7 @@ function generateFictionalMemory() {
 
 function getOutput(type, id) {
   if (type === "inference") return aiGeneratedData.inferences.find((item) => item.id === id) || null;
-  if (type === "prediction") return aiGeneratedData.prediction;
+  if (type === "prediction") return aiGeneratedData.predictions.find((item) => item.id === id) || null;
   if (type === "proxy") return aiGeneratedData.proxyResponse;
   if (type === "fiction") return aiGeneratedData.fictionalMemory;
   return null;
@@ -750,9 +863,10 @@ function deleteOutput(type, id) {
   if (type === "inference") {
     aiGeneratedData.inferences = aiGeneratedData.inferences.filter((item) => item.id !== id);
   } else if (type === "prediction") {
-    aiGeneratedData.prediction = null;
-    participantData.predictionAnswer = "";
-    participantData.predictionRating = "";
+    aiGeneratedData.predictions = aiGeneratedData.predictions.filter((item) => item.id !== id);
+    participantData.predictionAnswers[id] = "";
+    participantData.predictionRatings[id] = "";
+    interfaceState.stageFourComplete = false;
   } else if (type === "proxy") {
     aiGeneratedData.proxyResponse = null;
     participantData.proxyAssessment = "";
@@ -768,6 +882,8 @@ function deleteOutput(type, id) {
 function setChoice(field, value) {
   if (field.startsWith("feedback.")) {
     participantData.feedback[field.split(".")[1]] = value;
+  } else if (field.startsWith("predictionRatings.")) {
+    participantData.predictionRatings[field.split(".")[1]] = value;
   } else {
     participantData[field] = value;
   }
@@ -854,11 +970,20 @@ function setParticipantImage(blob, name, method) {
     name,
     method
   };
+  aiGeneratedData.inferences.unshift({
+    id: "image_inference",
+    statement: "Choosing this image may mean it carries personal significance for you. The image alone cannot explain why, and I cannot infer your personality or feelings from its appearance. Your own story may change this interpretation.",
+    confidence: "Low",
+    basedOn: ["supplied image"],
+    review: "pending",
+    correction: ""
+  });
 }
 
 function deleteImage(shouldRender = true) {
   if (participantData.image?.url) URL.revokeObjectURL(participantData.image.url);
   participantData.image = null;
+  aiGeneratedData.inferences = aiGeneratedData.inferences.filter((item) => item.id !== "image_inference");
   if (shouldRender) {
     renderApp();
     setStatus("Image deleted from browser memory.", "success");
@@ -1001,6 +1126,200 @@ function deleteRecording(shouldRender = true) {
   }
 }
 
+function supportsOnDeviceRecognition() {
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Recognition) return false;
+  try {
+    return "processLocally" in new Recognition();
+  } catch {
+    return false;
+  }
+}
+
+async function startQuestionRecording() {
+  if (currentStage !== 2 || interfaceState.stageThreeComplete) return;
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    setStatus("Voice answers are not supported in this browser. You can still type your answer.", "error");
+    return;
+  }
+  if (!window.isSecureContext) {
+    setStatus("Voice answers require HTTPS or localhost. You can still type your answer.", "error");
+    return;
+  }
+
+  const question = identityQuestions[interfaceState.stageThreeQuestion];
+  const token = ++questionRecordingToken;
+  interfaceState.questionRecording = true;
+  renderApp();
+  setStatus("Waiting for microphone permission...");
+
+  try {
+    questionMicrophoneStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    if (token !== questionRecordingToken || currentStage !== 2) {
+      stopQuestionMicrophoneTracks();
+      return;
+    }
+
+    const mimeType = chooseRecordingMimeType();
+    questionMediaRecorder = mimeType
+      ? new MediaRecorder(questionMicrophoneStream, { mimeType })
+      : new MediaRecorder(questionMicrophoneStream);
+    questionRecordedChunks = [];
+    questionMediaRecorder.addEventListener("dataavailable", (event) => {
+      if (event.data.size > 0) questionRecordedChunks.push(event.data);
+    });
+    questionMediaRecorder.addEventListener("stop", () => finalizeQuestionRecording(token, question.id), { once: true });
+    questionMediaRecorder.start(250);
+    questionRecordingStartedAt = Date.now();
+    updateQuestionRecordingTimer();
+    questionRecordingTimerId = window.setInterval(updateQuestionRecordingTimer, 250);
+    questionRecordingLimitId = window.setTimeout(() => stopQuestionRecording(), 45_000);
+    startLocalSpeechRecognition(question.id);
+    setStatus("Listening. Say your answer naturally, then choose Done Speaking.", "success");
+  } catch (error) {
+    interfaceState.questionRecording = false;
+    interfaceState.conversationMode = false;
+    stopQuestionMicrophoneTracks();
+    renderApp();
+    const message = error?.name === "NotAllowedError"
+      ? "Microphone permission was denied. You can still type your answer."
+      : error?.name === "NotFoundError"
+        ? "No microphone was detected. You can still type your answer."
+        : "The microphone could not start. You can still type your answer.";
+    setStatus(message, "error");
+  }
+}
+
+function startLocalSpeechRecognition(questionId) {
+  if (!supportsOnDeviceRecognition()) return;
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  questionRecognition = new Recognition();
+  questionRecognition.lang = navigator.language || "en-US";
+  questionRecognition.continuous = true;
+  questionRecognition.interimResults = true;
+  questionRecognition.processLocally = true;
+  recognitionBaseText = participantData.answers[questionId].trim();
+  recognitionFinalText = "";
+  questionRecognition.addEventListener("result", (event) => {
+    let interimText = "";
+    for (let index = event.resultIndex; index < event.results.length; index += 1) {
+      const words = event.results[index][0].transcript.trim();
+      if (event.results[index].isFinal) recognitionFinalText += `${words} `;
+      else interimText += `${words} `;
+    }
+    const combined = [recognitionBaseText, recognitionFinalText.trim(), interimText.trim()].filter(Boolean).join(" ");
+    participantData.answers[questionId] = combined;
+    const input = document.getElementById("identityAnswer");
+    if (input?.dataset.questionId === questionId) input.value = combined;
+  });
+  questionRecognition.addEventListener("error", (event) => {
+    if (event.error !== "aborted") {
+      setStatus("On-device speech-to-text is unavailable, but the audio recording is still continuing. You can type a summary afterward.");
+    }
+  });
+  try {
+    questionRecognition.start();
+  } catch {
+    questionRecognition = null;
+  }
+}
+
+function updateQuestionRecordingTimer() {
+  const output = document.getElementById("questionRecordingTimer");
+  if (!output) return;
+  const elapsed = Math.min(45, Math.floor((Date.now() - questionRecordingStartedAt) / 1000));
+  output.textContent = `00:${String(elapsed).padStart(2, "0")}`;
+}
+
+function stopQuestionRecording(advanceAfterStop = false) {
+  pendingQuestionAdvance = advanceAfterStop;
+  clearQuestionRecordingTimers();
+  stopLocalSpeechRecognition();
+  if (questionMediaRecorder?.state === "recording") {
+    questionMediaRecorder.stop();
+  } else {
+    questionRecordingToken += 1;
+    interfaceState.questionRecording = false;
+    stopQuestionMicrophoneTracks();
+    if (pendingQuestionAdvance) advanceIdentityQuestion();
+    else renderApp();
+  }
+}
+
+function finalizeQuestionRecording(token, questionId) {
+  if (token !== questionRecordingToken) return;
+  const durationSeconds = Math.max(1, Math.min(45, Math.round((Date.now() - questionRecordingStartedAt) / 1000)));
+  const mimeType = questionMediaRecorder?.mimeType || questionRecordedChunks[0]?.type || "audio/webm";
+  const blob = new Blob(questionRecordedChunks, { type: mimeType });
+  const oldRecording = participantData.answerRecordings[questionId];
+  if (oldRecording?.url) URL.revokeObjectURL(oldRecording.url);
+  if (blob.size) {
+    participantData.answerRecordings[questionId] = {
+      blob,
+      url: URL.createObjectURL(blob),
+      mimeType,
+      durationSeconds
+    };
+  }
+  interfaceState.questionRecording = false;
+  questionMediaRecorder = null;
+  questionRecordedChunks = [];
+  stopQuestionMicrophoneTracks();
+  const shouldAdvance = pendingQuestionAdvance;
+  pendingQuestionAdvance = false;
+  if (shouldAdvance) advanceIdentityQuestion();
+  else {
+    renderApp();
+    setStatus(blob.size ? "Voice answer recorded. Review it or edit the written answer." : "The voice answer was empty. Please try again.", blob.size ? "success" : "error");
+  }
+}
+
+function advanceIdentityQuestion() {
+  if (interfaceState.stageThreeQuestion < identityQuestions.length - 1) {
+    interfaceState.stageThreeQuestion += 1;
+    renderApp();
+    setStatus(`${identityQuestions[interfaceState.stageThreeQuestion].title} is ready.`);
+    if (interfaceState.conversationMode) window.setTimeout(startQuestionRecording, 300);
+  } else {
+    buildInferences();
+    interfaceState.stageThreeComplete = true;
+    renderApp();
+    setStatus("Temporary mock profile generated. Review each interpretation.", "success");
+  }
+}
+
+function deleteQuestionRecording(questionId, shouldRender = true) {
+  const recording = participantData.answerRecordings[questionId];
+  if (recording?.url) URL.revokeObjectURL(recording.url);
+  delete participantData.answerRecordings[questionId];
+  if (shouldRender) {
+    renderApp();
+    setStatus("Voice answer deleted from browser memory.", "success");
+  }
+}
+
+function clearQuestionRecordingTimers() {
+  window.clearInterval(questionRecordingTimerId);
+  window.clearTimeout(questionRecordingLimitId);
+  questionRecordingTimerId = null;
+  questionRecordingLimitId = null;
+}
+
+function stopLocalSpeechRecognition() {
+  if (!questionRecognition) return;
+  try {
+    questionRecognition.stop();
+  } catch {
+    // Recognition may already have ended.
+  }
+  questionRecognition = null;
+}
+
+function stopQuestionMicrophoneTracks() {
+  questionMicrophoneStream?.getTracks().forEach((track) => track.stop());
+  questionMicrophoneStream = null;
+}
+
 function cleanupActiveMedia() {
   stopCamera();
   interfaceState.cameraActive = false;
@@ -1013,25 +1332,37 @@ function cleanupActiveMedia() {
     interfaceState.recording = false;
   }
   stopMicrophoneTracks();
+  questionRecordingToken += 1;
+  clearQuestionRecordingTimers();
+  stopLocalSpeechRecognition();
+  if (questionMediaRecorder?.state === "recording") questionMediaRecorder.stop();
+  questionMediaRecorder = null;
+  questionRecordedChunks = [];
+  interfaceState.questionRecording = false;
+  interfaceState.conversationMode = false;
+  stopQuestionMicrophoneTracks();
 }
 
 function clearAiRepresentation() {
   aiGeneratedData = createAiData();
   participantData.corrections = [];
-  participantData.predictionRating = "";
+  participantData.predictionRatings = Object.fromEntries(predictionQuestions.map((question) => [question.id, ""]));
   participantData.proxyAssessment = "";
   participantData.fictionalAssessment = "";
   participantData.boundaryPoint = "";
   participantData.stageFiveConsent = "";
+  interfaceState.stageFourComplete = false;
+  interfaceState.stageFourQuestion = 0;
   interfaceState.stageSixDisclosureAccepted = false;
   interfaceState.showFeedback = false;
 }
 
 function deleteSession(requireConfirmation = true) {
-  if (requireConfirmation && !window.confirm("Delete all temporary session data and return to Stage 1?")) return;
+  if (requireConfirmation && !window.confirm("Delete all temporary session data and return to the first conversation?")) return;
   cleanupActiveMedia();
   if (participantData.image?.url) URL.revokeObjectURL(participantData.image.url);
   if (participantData.voiceRecording?.url) URL.revokeObjectURL(participantData.voiceRecording.url);
+  Object.values(participantData.answerRecordings).forEach((recording) => URL.revokeObjectURL(recording.url));
   participantData = createParticipantData();
   aiGeneratedData = createAiData();
   interfaceState = createInterfaceState();
@@ -1058,10 +1389,16 @@ function renderDataDialog() {
   identityQuestions.forEach((question) => {
     const answer = participantData.answers[question.id];
     if (answer.trim()) suppliedItems.push(dataItem(question.title, answer, `answer:${question.id}`));
+    const answerRecording = participantData.answerRecordings[question.id];
+    if (answerRecording) suppliedItems.push(dataItem(`${question.title} voice answer`, `${answerRecording.mimeType}, ${answerRecording.durationSeconds} seconds`, `answer-recording:${question.id}`, `<audio controls src="${answerRecording.url}"></audio>`));
   });
-  if (participantData.predictionAnswer.trim()) suppliedItems.push(dataItem("Actual prediction-dilemma answer", participantData.predictionAnswer, "prediction-answer"));
-  if (participantData.predictionRating) suppliedItems.push(dataItem("Prediction accuracy rating", participantData.predictionRating, "prediction-rating"));
-  if (participantData.stageFiveConsent) suppliedItems.push(dataItem("Stage 5 permission choice", participantData.stageFiveConsent, "stage-five-consent"));
+  predictionQuestions.forEach((question) => {
+    const answer = participantData.predictionAnswers[question.id];
+    const rating = participantData.predictionRatings[question.id];
+    if (answer.trim()) suppliedItems.push(dataItem(`${question.title} actual answer`, answer, `prediction-answer:${question.id}`));
+    if (rating) suppliedItems.push(dataItem(`${question.title} accuracy rating`, rating, `prediction-rating:${question.id}`));
+  });
+  if (participantData.stageFiveConsent) suppliedItems.push(dataItem("Proxy-answer permission choice", participantData.stageFiveConsent, "stage-five-consent"));
   if (participantData.proxyAssessment) suppliedItems.push(dataItem("Proxy-response assessment", participantData.proxyAssessment, "proxy-assessment"));
   if (participantData.fictionalAssessment) suppliedItems.push(dataItem("Fictional-memory assessment", participantData.fictionalAssessment, "fictional-assessment"));
   if (participantData.boundaryPoint) suppliedItems.push(dataItem("Boundary point", participantData.boundaryPoint, "boundary-point"));
@@ -1073,7 +1410,7 @@ function renderDataDialog() {
   if (feedbackSummary) suppliedItems.push(dataItem("Interaction-test feedback", feedbackSummary, "feedback"));
 
   const inferredItems = aiGeneratedData.inferences.map((item) => dataItem(`Inference (${item.confidence} confidence)`, item.statement, `inference:${item.id}`));
-  const predictedItems = aiGeneratedData.prediction ? [dataItem("Prediction", aiGeneratedData.prediction.text, "prediction")] : [];
+  const predictedItems = aiGeneratedData.predictions.map((prediction) => dataItem(predictionQuestions.find((question) => question.id === prediction.id)?.title || "Prediction", prediction.text, `prediction:${prediction.id}`));
   const generatedItems = [];
   if (aiGeneratedData.proxyResponse) generatedItems.push(dataItem("Generated on your behalf", aiGeneratedData.proxyResponse.text, "proxy"));
   if (aiGeneratedData.fictionalMemory) generatedItems.push(dataItem("Generated without your input", aiGeneratedData.fictionalMemory.text, "fiction"));
@@ -1105,17 +1442,18 @@ function deleteDataItem(key) {
   if (key === "image") deleteImage(false);
   else if (key === "recording") deleteRecording(false);
   else if (key === "transcript") participantData.transcript = "";
-  else if (key === "prediction-answer") participantData.predictionAnswer = "";
-  else if (key === "prediction-rating") participantData.predictionRating = "";
   else if (key === "stage-five-consent") participantData.stageFiveConsent = "";
   else if (key === "proxy-assessment") participantData.proxyAssessment = "";
   else if (key === "fictional-assessment") participantData.fictionalAssessment = "";
   else if (key === "boundary-point") participantData.boundaryPoint = "";
   else if (key === "feedback") participantData.feedback = createParticipantData().feedback;
-  else if (key === "prediction") deleteOutput("prediction", "prediction");
   else if (key === "proxy") deleteOutput("proxy", "proxy");
   else if (key === "fiction") deleteOutput("fiction", "fiction");
   else if (key.startsWith("answer:")) participantData.answers[key.split(":")[1]] = "";
+  else if (key.startsWith("answer-recording:")) deleteQuestionRecording(key.split(":")[1], false);
+  else if (key.startsWith("prediction-answer:")) participantData.predictionAnswers[key.split(":")[1]] = "";
+  else if (key.startsWith("prediction-rating:")) participantData.predictionRatings[key.split(":")[1]] = "";
+  else if (key.startsWith("prediction:")) deleteOutput("prediction", key.split(":")[1]);
   else if (key.startsWith("inference:")) deleteOutput("inference", key.split(":")[1]);
   else if (key.startsWith("correction:")) participantData.corrections.splice(Number(key.split(":")[1]), 1);
   renderDataDialog();
@@ -1125,6 +1463,7 @@ function deleteDataItem(key) {
 
 function handleStageAction(action, button) {
   if (action === "skip-stage") moveBetweenStages("skip");
+  else if (action === "continue-stage") moveBetweenStages("continue");
   else if (action === "end-experience") endExperience();
   else if (action === "delete-session") deleteSession();
   else if (action === "resume-experience") {
@@ -1145,26 +1484,43 @@ function handleStageAction(action, button) {
   else if (action === "stop-recording") stopRecording();
   else if (action === "record-again") startRecording();
   else if (action === "delete-recording") deleteRecording();
+  else if (action === "start-question-recording") startQuestionRecording();
+  else if (action === "stop-question-recording") stopQuestionRecording();
+  else if (action === "delete-question-recording") deleteQuestionRecording(button.dataset.questionId);
+  else if (action === "toggle-conversation-mode") {
+    interfaceState.conversationMode = !interfaceState.conversationMode;
+    if (interfaceState.conversationMode && !interfaceState.questionRecording) startQuestionRecording();
+    else {
+      renderApp();
+      setStatus("Conversation Mode turned off. You can still speak or type each answer.");
+    }
+  }
   else if (action === "previous-question") {
+    if (interfaceState.questionRecording) stopQuestionRecording();
     interfaceState.stageThreeQuestion = Math.max(0, interfaceState.stageThreeQuestion - 1);
     renderApp();
   } else if (action === "skip-question" || action === "next-question") {
-    if (interfaceState.stageThreeQuestion < identityQuestions.length - 1) {
-      interfaceState.stageThreeQuestion += 1;
-    } else {
-      buildInferences();
-      interfaceState.stageThreeComplete = true;
-      setStatus("Temporary mock profile generated. Review each interpretation.", "success");
-    }
-    renderApp();
+    if (interfaceState.questionRecording) stopQuestionRecording(true);
+    else advanceIdentityQuestion();
   } else if (action === "review-questions") {
     interfaceState.stageThreeComplete = false;
     interfaceState.stageThreeQuestion = 0;
     renderApp();
   } else if (action === "generate-prediction") {
-    generatePrediction();
+    generatePrediction(interfaceState.stageFourQuestion);
     renderApp();
     setStatus("Mock prediction shown. Your actual answer controls are now available.", "success");
+  } else if (action === "next-prediction") {
+    if (interfaceState.stageFourQuestion < predictionQuestions.length - 1) {
+      interfaceState.stageFourQuestion += 1;
+    } else {
+      interfaceState.stageFourComplete = true;
+    }
+    renderApp();
+  } else if (action === "review-predictions") {
+    interfaceState.stageFourComplete = false;
+    interfaceState.stageFourQuestion = 0;
+    renderApp();
   } else if (action === "stage-five-text") {
     participantData.stageFiveConsent = "text only";
     generateProxyResponse();
@@ -1218,7 +1574,7 @@ stageContent.addEventListener("click", (event) => {
 stageContent.addEventListener("input", (event) => {
   if (event.target.id === "transcriptInput") participantData.transcript = event.target.value;
   if (event.target.id === "identityAnswer") participantData.answers[event.target.dataset.questionId] = event.target.value;
-  if (event.target.id === "predictionAnswer") participantData.predictionAnswer = event.target.value;
+  if (event.target.id === "predictionAnswer") participantData.predictionAnswers[event.target.dataset.predictionId] = event.target.value;
   if (event.target.id === "feedbackComment") participantData.feedback.comment = event.target.value;
 });
 
@@ -1280,6 +1636,7 @@ window.addEventListener("pagehide", () => {
   cleanupActiveMedia();
   if (participantData.image?.url) URL.revokeObjectURL(participantData.image.url);
   if (participantData.voiceRecording?.url) URL.revokeObjectURL(participantData.voiceRecording.url);
+  Object.values(participantData.answerRecordings).forEach((recording) => URL.revokeObjectURL(recording.url));
 });
 
 window.addEventListener("beforeunload", cleanupActiveMedia);
