@@ -6,7 +6,7 @@ const vm = require("node:vm");
 const { validateIdentityProfile, validatePrediction } = require("../server/schemas.cjs");
 
 const script = fs.readFileSync(path.join(__dirname, "..", "script.js"), "utf8");
-function harness({ mode = "mock", fail = "", cameraError, micError, transcript } = {}) {
+function harness({ mode = "mock", fail = "", cameraError, micError, transcript, mediaSuccess = false, didFailure = false } = {}) {
   const elements = new Map();
   const stopped = [];
   const requests = [];
@@ -36,8 +36,16 @@ function harness({ mode = "mock", fail = "", cameraError, micError, transcript }
       this.onstop?.();
     }
   }
+  class Reader {
+    readAsDataURL(blob) {
+      blob.arrayBuffer().then(buffer => {
+        this.result = `data:${blob.type};base64,${Buffer.from(buffer).toString("base64")}`;
+        this.onload?.();
+      }).catch(() => this.onerror?.());
+    }
+  }
   const context = vm.createContext({
-    document, Blob, URL, URLSearchParams, AbortController, MediaRecorder: Recorder, console,
+    document, Blob, URL, URLSearchParams, AbortController, MediaRecorder: Recorder, FileReader: Reader, console,
     setTimeout, clearTimeout, setInterval, clearInterval,
     location: { search: `?mode=${mode}${fail ? `&fail=${fail}` : ""}` },
     isSecureContext: true, confirm: () => true, prompt: () => "Participant correction",
@@ -48,9 +56,10 @@ function harness({ mode = "mock", fail = "", cameraError, micError, transcript }
     } } },
     fetch: async (url, options) => {
       requests.push({ url, options });
-      return url === "/api/transcribe" && transcript
-        ? { ok: true, text: async () => transcript }
-        : { ok: false, status: 503, json: async () => ({ error: "Simulated service failure." }) };
+      if (url === "/api/transcribe" && transcript) return { ok: true, text: async () => transcript };
+      if (mediaSuccess && url.startsWith("/api/cloned-speech")) return { ok: true, blob: async () => new Blob(["cloned"], { type: "audio/mpeg" }) };
+      if (mediaSuccess && url === "/api/talking-avatar" && !didFailure) return { ok: true, blob: async () => new Blob(["video"], { type: "video/mp4" }) };
+      return { ok: false, status: 503, json: async () => ({ error: didFailure && url === "/api/talking-avatar" ? "D-ID could not animate this image." : "Simulated service failure." }) };
     }
   });
   context.window = context;
@@ -167,13 +176,36 @@ test("OpenAI analysis and generation failures leave mock fallback controls", asy
   await h.run("generatePrediction()");
   assert.match(h.run("renderPrediction()"), /Use Mock Prediction/);
 });
-test("ElevenLabs and D-ID are not called; text/still-image fallback is explicit", () => {
-  const h = harness({ fail: "elevenlabs" });
-  h.run('sessionState.currentStage = 5; sessionState.consent.proxyResponse = true; sessionState.consent.voiceCloning = true; sessionState.consent.faceAnimation = true; sessionState.generated.proxyResponses = [mockProxy([])]');
-  assert.match(h.run("renderProxy()"), /No cloned voice or facial animation was generated/);
-  const did = harness({ fail: "did" });
-  did.run('sessionState.currentStage = 5; sessionState.consent.proxyResponse = true; sessionState.generated.proxyResponses = [mockProxy([])]');
-  assert.match(did.run("renderProxy()"), /text only/);
+test("Stage 5 creates cloned first-person speech and a talking avatar after separate consent", async () => {
+  const h = harness({ mediaSuccess: true });
+  h.run(`sessionState.currentStage = 5;
+    sessionState.consent.proxyResponse = true; sessionState.consent.voiceCloning = true; sessionState.consent.faceAnimation = true;
+    sessionState.supplied.answers[0].audio = { blob: new Blob(["voice sample"], {type:"audio/webm"}), url:"blob:voice", type:"audio/webm" };
+    sessionState.supplied.image = { blob: new Blob(["portrait"], {type:"image/jpeg"}), url:"blob:image", origin:"upload" };
+    sessionState.generated.proxyResponses = [mockProxy([])]`);
+  await h.run("generateProxyMedia()");
+  assert.match(h.run("sessionState.generated.proxyResponses[0].text"), /I would/);
+  assert.equal(h.run("sessionState.generated.proxyMedia.presentation"), "talking-avatar");
+  assert.ok(h.requests.some(request => request.url.startsWith("/api/cloned-speech?text=I%20would")));
+  assert.ok(h.requests.some(request => request.url === "/api/talking-avatar"));
+  assert.match(h.run("renderProxy()"), /D-ID talking portrait with temporary ElevenLabs cloned voice/);
+});
+test("D-ID failure preserves cloned audio instead of silently using standard voice", async () => {
+  const h = harness({ mediaSuccess: true, didFailure: true });
+  h.run(`sessionState.currentStage = 5; sessionState.consent.voiceCloning = true; sessionState.consent.faceAnimation = true;
+    sessionState.supplied.audio = { blob: new Blob(["voice sample"], {type:"audio/webm"}), url:"blob:voice", type:"audio/webm" };
+    sessionState.supplied.image = { blob: new Blob(["object"], {type:"image/jpeg"}), url:"blob:image", origin:"upload" };
+    sessionState.generated.proxyResponses = [mockProxy([])]`);
+  await h.run("generateProxyMedia()");
+  assert.equal(h.run("sessionState.generated.proxyMedia.presentation"), "cloned-audio");
+  assert.equal(h.run("Boolean(sessionState.generated.proxyMedia.audio)"), true);
+  assert.equal(h.run("Boolean(sessionState.generated.proxyMedia.video)"), false);
+  assert.match(h.run("renderProxy()"), /temporary cloned audio remains available/);
+});
+test("Stage 5 question does not assume the supplied image has a memory", () => {
+  const h = harness(); h.run("sessionState.currentStage = 5");
+  assert.match(h.run("renderProxy()"), /important decision on your behalf/);
+  assert.doesNotMatch(h.run("renderProxy()"), /memory connected to your image/);
 });
 test("Skip, Back and previous-question navigation preserve answers", () => {
   const h = harness();

@@ -14,7 +14,7 @@ const questions = [
   "What is something people often misunderstand about you?"
 ];
 const dilemma = "An opportunity you really want conflicts with a promise you have already made. What would you choose?";
-const proxyQuestion = "What would you do if the memory connected to your image disappeared?";
+const proxyQuestion = "Someone close to you makes an important decision on your behalf without asking and says, 'I knew what you would want.' How would you respond?";
 const labels = {
   supplied: ["+", "SUPPLIED BY YOU"], transcribed: ["T", "TRANSCRIBED FROM YOUR AUDIO"],
   inferred: ["?", "INFERRED BY AI"], predicted: [">", "PREDICTED BY AI"],
@@ -24,7 +24,7 @@ const stageElement = document.getElementById("stage");
 const statusElement = document.getElementById("status");
 const dialog = document.getElementById("dataDialog");
 const dataContent = document.getElementById("dataContent");
-const mockMode = new URLSearchParams(location.search).get("mode") !== "real";
+const mockMode = new URLSearchParams(location.search).get("mode") === "mock";
 const forcedFailure = new URLSearchParams(location.search).get("fail") || "";
 
 function newSession() {
@@ -35,7 +35,10 @@ function newSession() {
     },
     inferred: { profile: null, participantFeedback: [], mode: "" },
     predicted: { predictions: [], participantAnswers: [], comparisons: [], mode: "" },
-    generated: { proxyResponses: [], fictionalContent: [], proxyMode: "", fictionMode: "" },
+    generated: {
+      proxyResponses: [], fictionalContent: [], proxyMode: "", fictionMode: "",
+      proxyMedia: { audio: null, video: null, presentation: "text", error: "" }
+    },
     consent: {
       photoCapture: false, audioRecording: false, transcription: false,
       voiceCloning: false, faceAnimation: false, proxyResponse: false, fictionalGeneration: false,
@@ -105,7 +108,7 @@ function renderImage() {
     ${cameraStream ? `<div class="card"><p>Camera starting or ready. The preview is mirrored.</p><video id="cameraVideo" class="media camera" autoplay muted playsinline></video>${buttons([["capture", "Take Photo", "primary"], ["camera-off", "Turn Off Camera"]])}</div>` : ""}
     ${!cameraStream ? `<div class="controls"><label class="file-button">Upload Image <input id="imageInput" type="file" accept="image/*"></label>
       <button type="button" data-action="camera-consent">${sessionState.consent.photoCapture ? "Enable Camera" : "Use Webcam"}</button></div>` : ""}
-    ${!sessionState.consent.photoCapture && !cameraStream ? `<div class="disclosure"><p>Camera permission is requested only after you choose to allow it. The photograph stays in browser memory and is not uploaded in mock mode.</p>${buttons([["allow-camera", "Allow Camera Capture"]])}</div>` : ""}
+    ${!sessionState.consent.photoCapture && !cameraStream ? `<div class="disclosure"><p>Camera permission is requested only after you choose to allow it. The photograph stays in browser memory unless you later give separate permission for D-ID facial animation.</p>${buttons([["allow-camera", "Allow Camera Capture"]])}</div>` : ""}
     ${image ? buttons([["confirm-image", "Confirm Image", "primary"], ["retake", "Retake / Replace"], ["delete-image", "Delete Image", "danger"]]) : ""}
     <p class="small">You may continue without an image.</p>`;
 }
@@ -172,16 +175,26 @@ function renderPrediction() {
 function renderProxy() {
   const item = sessionState.generated.proxyResponses[0];
   const image = sessionState.supplied.image;
+  const voiceSample = bestVoiceRecording();
+  const media = sessionState.generated.proxyMedia;
   return `<h3>${escapeHtml(proxyQuestion)}</h3><div class="disclosure">The system would answer this new question on your behalf using a limited, temporary interpretation. You do not answer first. This requires separate permission.</div>
     ${!sessionState.consent.proxyResponse ? buttons([["allow-proxy", "Allow Text Response", "primary"]]) : ""}
-    <div class="card"><strong>Optional media permissions</strong><p class="small">Voice cloning and facial animation are not connected to this session-safe integration. Choosing either records only your preference; no sample or image is uploaded to those services. The response falls back to still image and text.</p>
-      ${buttons([["toggle-voice", sessionState.consent.voiceCloning ? "Revoke Voice-Cloning Preference" : "Allow Voice-Cloning Preference"], ["toggle-face", sessionState.consent.faceAnimation ? "Revoke Face-Animation Preference" : "Allow Face-Animation Preference"], ["toggle-standard-audio", sessionState.consent.standardAudio ? "Revoke Standard-Audio Permission" : "Allow Standard Audio Playback"]])}</div>
+    <div class="card"><strong>Separate optional media permissions</strong>
+      <p class="small">Voice cloning sends the longest recording from Stage 2 or 3 to ElevenLabs. A temporary clone is used for this response and deleted immediately after speech generation. Short or noisy recordings may sound less accurate.</p>
+      <p class="small">Facial animation separately sends the supplied image and cloned speech to D-ID. It generally requires a clear, front-facing human face; an object or flower will fall back to cloned audio and the still image. Vendor processing is external to this browser session.</p>
+      ${!voiceSample ? '<p class="warning">No voice recording is available. Return to Stage 2 or 3 and record an answer to enable cloning.</p>' : ""}
+      ${!image ? '<p class="warning">No image is available. A cloned voice can still be generated, but not a talking portrait.</p>' : ""}
+      ${buttons([["toggle-voice", sessionState.consent.voiceCloning ? "Revoke ElevenLabs Voice Consent" : "Allow ElevenLabs Voice Clone", "", !voiceSample], ["toggle-face", sessionState.consent.faceAnimation ? "Revoke D-ID Animation Consent" : "Allow D-ID Facial Animation", "", !image], ["toggle-standard-audio", sessionState.consent.standardAudio ? "Revoke Standard-Audio Permission" : "Allow Standard Voice Fallback"]])}</div>
     ${sessionState.consent.proxyResponse && !item ? buttons([["generate-proxy", "Generate Response", "primary", busy], ["mock-proxy", "Use Mock Response"]]) : ""}
-    ${item ? `<article class="output">${source("proxy", sessionState.generated.proxyMode === "mock" ? "MOCK" : "")}${image ? `<img class="media" src="${image.url}" alt="Still version of your supplied image">` : ""}<p>${escapeHtml(item.text)}</p>
+    ${item ? `<article class="output">${source("proxy", sessionState.generated.proxyMode === "mock" ? "MOCK" : "")}
+      ${media.video ? `<video class="media" controls playsinline preload="metadata" src="${media.video.url}"></video>` : image ? `<img class="media" src="${image.url}" alt="Still version of your supplied image">` : ""}
+      ${media.audio && !media.video ? `<audio controls preload="metadata" src="${media.audio.url}"></audio>` : ""}
+      <p>${escapeHtml(item.text)}</p>
       <p class="small">Based on: ${escapeHtml(item.evidence_ids.join(", ") || "limited input")}. Confidence: ${escapeHtml(item.confidence_label)}. This is an AI interpretation, not your real answer.</p>
-      <p class="small">Presentation: ${image ? "still image with text" : "text only"}${sessionState.consent.standardAudio && "speechSynthesis" in window ? ", with optional standard browser audio" : ""}. No cloned voice or facial animation was generated.</p>
+      <p class="small">Presentation: ${media.presentation === "talking-avatar" ? "D-ID talking portrait with temporary ElevenLabs cloned voice" : media.presentation === "cloned-audio" ? `${image ? "still image with" : ""} temporary ElevenLabs cloned voice` : image ? "still image with text" : "text only"}.</p>
+      ${media.error ? `<p class="warning">${escapeHtml(media.error)}</p>` : ""}
       ${item.feedback ? `<p>Your review: ${escapeHtml(item.feedback)}${item.correction ? ` — ${escapeHtml(item.correction)}` : ""}</p>` : ""}
-      ${buttons([...(sessionState.consent.standardAudio && "speechSynthesis" in window ? [["play-proxy", "Play Standard Voice"]] : []), ["review-proxy", "Accept"], ["correct-proxy", "Correct"], ["reject-proxy", "Reject"], ["delete-proxy", "Delete Response", "danger"]])}</article>` : ""}`;
+      ${buttons([...(sessionState.consent.voiceCloning && voiceSample && !media.video ? [["generate-proxy-media", media.audio ? "Retry Talking Avatar" : "Generate Cloned Voice / Avatar", "primary", busy]] : []), ...(sessionState.consent.standardAudio && "speechSynthesis" in window && !media.audio ? [["play-proxy", "Play Standard Voice Fallback"]] : []), ["review-proxy", "Accept"], ["correct-proxy", "Correct"], ["reject-proxy", "Reject"], ["delete-proxy", "Delete Response", "danger"]])}</article>` : ""}`;
 }
 function renderFiction() {
   const item = sessionState.generated.fictionalContent[0];
@@ -229,7 +242,7 @@ function mockPrediction(answers) {
 }
 function mockProxy(answers) {
   const evidence = answers.map(item => item.id);
-  return { text: "This is what I think you would do. You might try to preserve what the image means through your own words, while recognising that I cannot know how losing that memory would feel to you.",
+  return { text: "This is what I think you would do. I would ask why the decision was made without me, explain what I would have chosen, and decide whether the outcome could still be changed. I might appreciate the intention, but I would want my choices to remain mine. This mock response cannot know my real reaction.",
     evidence_ids: evidence, confidence_label: "low", feedback: "", correction: "" };
 }
 function mockFiction(answers) {
@@ -240,7 +253,7 @@ function mockFiction(answers) {
   const story = fragment(answers.find(item => item.id === "image_story")?.answer);
   const question = fragment(answers.find(item => item.id.startsWith("question_"))?.answer);
   const fragments = [story, question].filter(Boolean).map(value => `"${value}"`).join(" and ");
-  return { text: `I remember ${detail} as I looked at the image${fragments ? ` and thought about ${fragments}` : ""}. This scene is fictional; the detail was invented for the test.`,
+  return { text: `I remember noticing ${detail} before anyone else arrived. ${fragments ? `The scene seemed connected to ${fragments}, although I could not explain why.` : "The place felt familiar even though no real location had been supplied."} I decided to keep the detail to myself and walked away before the light changed. This entire scene is a mock fictional construction, not a real memory.`,
     invented_detail: detail, evidence_ids: answers.map(item => item.id) };
 }
 function readableAnswers() {
@@ -250,13 +263,36 @@ function readableAnswers() {
   sessionState.supplied.answers.forEach(row => { if (row.text.trim()) answers.push({ id: row.id, question: row.question, answer: row.text.trim() }); });
   return answers;
 }
+function identityContext() {
+  return {
+    profile: sessionState.inferred.profile,
+    profile_feedback: sessionState.inferred.participantFeedback,
+    prediction: sessionState.predicted.predictions[0] || null,
+    participant_prediction_answer: sessionState.predicted.participantAnswers[0] || null,
+    prediction_comparison: sessionState.predicted.comparisons[0] || null
+  };
+}
+function bestVoiceRecording() {
+  return [sessionState.supplied.audio, ...sessionState.supplied.answers.map(answer => answer.audio)]
+    .filter(item => item?.blob)
+    .sort((left, right) => right.blob.size - left.blob.size)[0] || null;
+}
+function clearProxyMedia() {
+  const media = sessionState.generated.proxyMedia;
+  if (media) { revoke(media.audio); revoke(media.video); }
+  sessionState.generated.proxyMedia = { audio: null, video: null, presentation: "text", error: "" };
+}
 function invalidateAnalysis() {
+  clearProxyMedia();
   sessionState.inferred.profile = null;
   sessionState.inferred.mode = "";
   sessionState.inferred.participantFeedback = [];
   sessionState.predicted = { predictions: [], participantAnswers: [], comparisons: [], mode: "" };
   sessionState.predictionShown = false;
-  sessionState.generated = { proxyResponses: [], fictionalContent: [], proxyMode: "", fictionMode: "" };
+  sessionState.generated = {
+    proxyResponses: [], fictionalContent: [], proxyMode: "", fictionMode: "",
+    proxyMedia: { audio: null, video: null, presentation: "text", error: "" }
+  };
 }
 async function callApi(path, payload, format = "json") {
   const controller = new AbortController();
@@ -273,6 +309,33 @@ async function callApi(path, payload, format = "json") {
     }
     return format === "audio" ? response.text() : response.json();
   } finally { inFlight.delete(controller); }
+}
+async function callBinaryApi(path, payload, contentType) {
+  const controller = new AbortController();
+  inFlight.add(controller);
+  try {
+    const response = await fetch(path, {
+      method: "POST", cache: "no-store", signal: controller.signal,
+      headers: { "Content-Type": contentType }, body: payload
+    }).catch(() => { throw new Error("Cannot reach the integration media server at http://127.0.0.1:4180/."); });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || `Media server returned ${response.status}.`);
+    }
+    return response.blob();
+  } finally { inFlight.delete(controller); }
+}
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("The temporary media could not be read."));
+    reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
+    reader.readAsDataURL(blob);
+  });
+}
+function proxySpeechText(text) {
+  const framing = "This is what I think you would do. ";
+  return text.startsWith(framing) ? text.slice(framing.length) : text;
 }
 async function operation(message, fn, fallback) {
   if (busy) return;
@@ -321,15 +384,52 @@ async function generatePrediction() {
 async function generateProxy() {
   if (!sessionState.consent.proxyResponse) return status("Allow the proxy response first.", "error");
   const answers = readableAnswers();
-  await operation("Creating a response on your behalf...", async () => {
+  const completed = await operation("Creating a response on your behalf...", async () => {
     if (forcedFailure === "openai") throw new Error("Simulated OpenAI generation failure.");
     const useMock = mockMode || !answers.length;
     const result = useMock ? mockProxy(answers)
-      : (await callApi("/api/proxy", { answers, question: proxyQuestion })).response;
-    if (!result?.text?.startsWith("This is what I think you would do.")) throw new Error("Invalid proxy response.");
+      : (await callApi("/api/proxy", { answers, question: proxyQuestion, context: identityContext() })).response;
+    if (!result?.text?.startsWith("This is what I think you would do. I would")) throw new Error("Invalid first-person proxy response.");
+    clearProxyMedia();
     sessionState.generated.proxyResponses = [{ ...result, feedback: "", correction: "" }];
     sessionState.generated.proxyMode = useMock ? "mock" : "real";
+    return true;
   }, "Use the mock text fallback.");
+  if (completed && sessionState.consent.voiceCloning) await generateProxyMedia();
+}
+async function generateProxyMedia() {
+  const item = sessionState.generated.proxyResponses[0];
+  const sample = bestVoiceRecording();
+  if (!item) return status("Generate the first-person response before creating media.", "error");
+  if (!sessionState.consent.voiceCloning) return status("Allow ElevenLabs voice cloning first.", "error");
+  if (!sample) return status("Record a voice answer in Stage 2 or 3 before cloning.", "error");
+  await operation("Creating a temporary voice clone and first-person speech...", async () => {
+    const media = sessionState.generated.proxyMedia;
+    media.error = "";
+    if (!media.audio) {
+      if (forcedFailure === "elevenlabs") throw new Error("Simulated ElevenLabs failure.");
+      const speech = await callBinaryApi(`/api/cloned-speech?text=${encodeURIComponent(proxySpeechText(item.text))}`, sample.blob, sample.type);
+      media.audio = { blob: speech, url: URL.createObjectURL(speech), type: "audio/mpeg" };
+      media.presentation = "cloned-audio";
+    }
+    if (sessionState.consent.faceAnimation && sessionState.supplied.image) {
+      try {
+        if (forcedFailure === "did") throw new Error("Simulated D-ID failure.");
+        const image = sessionState.supplied.image.blob;
+        const video = await callBinaryApi("/api/talking-avatar", JSON.stringify({
+          image_type: image.type || "image/jpeg", image_base64: await blobToBase64(image),
+          audio_type: "audio/mpeg", audio_base64: await blobToBase64(media.audio.blob)
+        }), "application/json");
+        revoke(media.video);
+        media.video = { blob: video, url: URL.createObjectURL(video), type: "video/mp4" };
+        media.presentation = "talking-avatar";
+      } catch (error) {
+        media.error = `${error.message} The temporary cloned audio remains available.`;
+        throw error;
+      }
+    }
+    return true;
+  }, "The response remains available as text, and completed cloned audio is preserved for playback.");
 }
 async function generateFiction() {
   if (!sessionState.consent.fictionalGeneration) return status("Allow fictional generation first.", "error");
@@ -338,7 +438,7 @@ async function generateFiction() {
     if (forcedFailure === "openai") throw new Error("Simulated OpenAI generation failure.");
     const useMock = mockMode || !answers.length;
     const result = useMock ? mockFiction(answers)
-      : (await callApi("/api/fiction", { answers })).fiction;
+      : (await callApi("/api/fiction", { answers, context: identityContext() })).fiction;
     if (!result?.text?.startsWith("I remember") || !result.invented_detail) throw new Error("Invalid fictional response.");
     sessionState.generated.fictionalContent = [result];
     sessionState.generated.fictionMode = useMock ? "mock" : "real";
@@ -502,6 +602,7 @@ function clearMedia() {
   if ("speechSynthesis" in window) speechSynthesis.cancel();
   revoke(sessionState.supplied.image); revoke(sessionState.supplied.audio);
   sessionState.supplied.answers.forEach(answer => revoke(answer.audio));
+  clearProxyMedia();
 }
 function stopActiveMedia() {
   generation += 1;
@@ -533,6 +634,8 @@ function renderData() {
   const predicted = sessionState.predicted.predictions.map((item,index) => dataItem("AI prediction", item.predicted_response || "Insufficient evidence", `prediction:${index}`));
   const generated = [
     ...sessionState.generated.proxyResponses.map((item,index) => dataItem("Proxy response", item.text, `proxy:${index}`)),
+    ...(sessionState.generated.proxyMedia.audio ? [dataItem("Temporary cloned speech", "ElevenLabs-generated MP3 held in browser memory", "proxy-media", `<audio controls src="${sessionState.generated.proxyMedia.audio.url}"></audio>`)] : []),
+    ...(sessionState.generated.proxyMedia.video ? [dataItem("Temporary talking portrait", "D-ID-generated MP4 held in browser memory", "proxy-media", `<video class="media" controls playsinline src="${sessionState.generated.proxyMedia.video.url}"></video>`)] : []),
     ...sessionState.generated.fictionalContent.map((item,index) => dataItem("Fictional content", item.text, `fiction:${index}`))
   ];
   dataContent.innerHTML = [["Supplied by you",supplied],["Inferred by AI",inferred],["Predicted by AI",predicted],["Generated by AI",generated]].map(([title,items]) =>
@@ -549,7 +652,8 @@ function deleteItem(key) {
   else if (key === "actual-answer") sessionState.predicted.participantAnswers = [];
   else if (key === "comparison") sessionState.predicted.comparisons = [];
   else if (key.startsWith("prediction:")) { sessionState.predicted.predictions = []; sessionState.predictionShown = false; render(); }
-  else if (key.startsWith("proxy:")) { sessionState.generated.proxyResponses = []; render(); }
+  else if (key === "proxy-media") { clearProxyMedia(); render(); }
+  else if (key.startsWith("proxy:")) { clearProxyMedia(); sessionState.generated.proxyResponses = []; render(); }
   else if (key.startsWith("fiction:")) { sessionState.generated.fictionalContent = []; render(); }
   render(); renderData(); status("Selected item deleted from this session.", "success");
 }
@@ -602,15 +706,33 @@ document.addEventListener("click", async event => {
     sessionState.inferred.participantFeedback.push({ id, verdict, correction: correction?.trim() || "" }); render();
   }
   else if (action === "allow-proxy") { sessionState.consent.proxyResponse = true; render(); }
-  else if (action === "toggle-voice") { sessionState.consent.voiceCloning = !sessionState.consent.voiceCloning; render(); }
-  else if (action === "toggle-face") { sessionState.consent.faceAnimation = !sessionState.consent.faceAnimation; render(); }
+  else if (action === "toggle-voice") {
+    sessionState.consent.voiceCloning = !sessionState.consent.voiceCloning;
+    if (!sessionState.consent.voiceCloning) clearProxyMedia();
+    render();
+  }
+  else if (action === "toggle-face") {
+    sessionState.consent.faceAnimation = !sessionState.consent.faceAnimation;
+    if (!sessionState.consent.faceAnimation) {
+      revoke(sessionState.generated.proxyMedia.video);
+      sessionState.generated.proxyMedia.video = null;
+      sessionState.generated.proxyMedia.presentation = sessionState.generated.proxyMedia.audio ? "cloned-audio" : "text";
+      sessionState.generated.proxyMedia.error = "";
+    }
+    render();
+  }
   else if (action === "toggle-standard-audio") { sessionState.consent.standardAudio = !sessionState.consent.standardAudio; if (!sessionState.consent.standardAudio && "speechSynthesis" in window) speechSynthesis.cancel(); render(); }
   else if (action === "generate-proxy") generateProxy();
-  else if (action === "mock-proxy") { sessionState.generated.proxyResponses = [mockProxy(readableAnswers())]; sessionState.generated.proxyMode = "mock"; render(); status("Mock proxy response ready.", "success"); }
+  else if (action === "mock-proxy") {
+    clearProxyMedia(); sessionState.generated.proxyResponses = [mockProxy(readableAnswers())]; sessionState.generated.proxyMode = "mock";
+    render(); status("Mock proxy response ready.", "success");
+    if (sessionState.consent.voiceCloning) await generateProxyMedia();
+  }
+  else if (action === "generate-proxy-media") generateProxyMedia();
   else if (action === "play-proxy" && sessionState.consent.standardAudio && "speechSynthesis" in window) { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(sessionState.generated.proxyResponses[0].text)); }
   else if (action === "review-proxy" || action === "reject-proxy") { sessionState.generated.proxyResponses[0].feedback = action === "review-proxy" ? "accepted" : "rejected"; render(); }
   else if (action === "correct-proxy") { const value = prompt("Your correction (the generated response stays visible):"); if (value?.trim()) { sessionState.generated.proxyResponses[0].feedback = "corrected"; sessionState.generated.proxyResponses[0].correction = value.trim(); render(); } }
-  else if (action === "delete-proxy") { sessionState.generated.proxyResponses = []; if ("speechSynthesis" in window) speechSynthesis.cancel(); render(); }
+  else if (action === "delete-proxy") { clearProxyMedia(); sessionState.generated.proxyResponses = []; if ("speechSynthesis" in window) speechSynthesis.cancel(); render(); }
   else if (action === "allow-fiction") { sessionState.consent.fictionalGeneration = true; render(); }
   else if (action === "generate-fiction") generateFiction();
   else if (action === "mock-fiction") { sessionState.generated.fictionalContent = [mockFiction(readableAnswers())]; sessionState.generated.fictionMode = "mock"; render(); status("Mock fictional memory ready.", "success"); }

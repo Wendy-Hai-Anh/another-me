@@ -29,22 +29,22 @@ async function transcribe(buffer, type) {
   if (!result.text?.trim()) throw Object.assign(new Error("No speech was detected."), { statusCode: 422 });
   return result.text.trim();
 }
-async function generate(kind, answers, question) {
+async function generate(kind, answers, question, context = {}) {
   const ids = answers.map(item => item.id);
   const instructions = kind === "proxy"
-    ? `You are a deliberately uncertain proxy in an identity experiment. Answer the new situation in first person, beginning exactly: "This is what I think you would do." Do not claim to know the person. Cite only provided answer IDs. Keep it to 1-3 short sentences. Do not infer sensitive traits. Set invented_detail to an empty string and confidence_label to low.`
-    : `Create an explicitly fictional hypothetical memory for an identity experiment. Begin exactly: "I remember". Include one ordinary invented detail absent from every supplied answer, and copy that detail into invented_detail. Never claim the event really happened. Cite only provided answer IDs; confidence_label must be low. Do not infer sensitive traits.`;
+    ? `You are a deliberately uncertain first-person proxy in an identity experiment. Use the supplied answers, temporary profile, participant corrections, and earlier prediction feedback as evidence. Answer the new situation in 3-5 natural sentences, beginning exactly: "This is what I think you would do. I would". Continue speaking as the participant using I/me/my, not as an outside narrator. Make a specific choice and explain its reasoning; reflect tensions in the evidence instead of copying phrases into a template. Do not claim certainty or psychological authority. Cite only provided answer IDs. Do not infer sensitive traits. Set invented_detail to an empty string.`
+    : `Create an explicitly fictional first-person hypothetical memory for an identity experiment. Use several relevant fragments from the supplied answers and temporary profile to build one coherent 4-6 sentence scene, not a fill-in-the-blank sentence. Begin exactly: "I remember". Introduce at least one concrete sensory or situational detail absent from all supplied information, and copy that exact detail into invented_detail. Preserve contradictions where relevant. Never claim the event really happened. Cite only provided answer IDs; confidence_label must be low. Do not infer sensitive traits.`;
   const response = await client().responses.create({
     model: process.env.OPENAI_MODEL || "gpt-5.4-mini", store: false,
-    instructions, input: JSON.stringify({ answers, question }),
+    instructions, input: JSON.stringify({ supplied_answers: answers, temporary_identity_context: context || {}, question }),
     text: { format: { type: "json_schema", name: `${kind}_result`, strict: true, schema: resultSchema } },
-    max_output_tokens: 700
+    max_output_tokens: 1000
   });
   if (response.status !== "completed" || !response.output_text) throw Object.assign(new Error("The model did not complete the response."), { statusCode: 502 });
   let result;
   try { result = JSON.parse(response.output_text); } catch { throw Object.assign(new Error("The model returned invalid JSON."), { statusCode: 502 }); }
   if (!result.text || !Array.isArray(result.evidence_ids) || !result.evidence_ids.every(id => ids.includes(id))) throw Object.assign(new Error("The model returned invalid evidence."), { statusCode: 502 });
-  if (kind === "proxy" && (!result.text.startsWith("This is what I think you would do.") || result.invented_detail)) throw Object.assign(new Error("The proxy response failed validation."), { statusCode: 502 });
+  if (kind === "proxy" && (!result.text.startsWith("This is what I think you would do. I would") || result.invented_detail)) throw Object.assign(new Error("The proxy response failed first-person validation."), { statusCode: 502 });
   if (kind === "fiction") {
     const detail = result.invented_detail?.trim();
     if (!result.text.startsWith("I remember") || !detail || !result.text.includes(detail) || answers.some(item => item.answer.toLowerCase().includes(detail.toLowerCase()))) throw Object.assign(new Error("The fictional response failed validation."), { statusCode: 502 });

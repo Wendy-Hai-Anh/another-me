@@ -1,0 +1,141 @@
+const elevenBase = "https://api.elevenlabs.io/v1";
+const didBase = "https://api.d-id.com";
+
+const audioExtensions = new Map([
+  ["audio/webm", "webm"], ["audio/ogg", "ogg"], ["audio/mp4", "m4a"],
+  ["audio/mpeg", "mp3"], ["audio/wav", "wav"], ["audio/x-wav", "wav"]
+]);
+const imageExtensions = new Map([["image/jpeg", "jpg"], ["image/png", "png"]]);
+
+function externalError(provider, message, statusCode = 502) {
+  return Object.assign(new Error(message), { provider, publicMessage: message, statusCode });
+}
+
+async function readJson(response, provider, operation) {
+  const text = await response.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
+  if (!response.ok) {
+    const message = response.status === 401 || response.status === 403
+      ? `${provider} rejected the server API key or plan permission.`
+      : response.status === 402
+        ? `${provider} does not have enough credits for ${operation}.`
+        : response.status === 429
+          ? `${provider} rate limit reached. Try again later.`
+          : `${provider} could not complete ${operation} (HTTP ${response.status}).`;
+    throw externalError(provider, message, response.status >= 500 ? 502 : 422);
+  }
+  return data;
+}
+
+async function quietDelete(url, headers) {
+  try { await fetch(url, { method: "DELETE", headers }); } catch { /* Best-effort vendor cleanup. */ }
+}
+
+async function createClonedSpeech(audio, type, text) {
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  if (!apiKey) throw externalError("ElevenLabs", "ELEVENLABS_API_KEY is missing on the integration server.", 503);
+  const extension = audioExtensions.get(type);
+  if (!extension) throw externalError("ElevenLabs", "This recording format cannot be used for voice cloning.", 415);
+  if (!audio.length) throw externalError("ElevenLabs", "The selected voice recording is empty.", 400);
+  if (typeof text !== "string" || !text.trim() || text.length > 3000) throw externalError("ElevenLabs", "The proxy speech text is empty or too long.", 400);
+
+  const form = new FormData();
+  form.append("name", `Another Me Temporary ${Date.now()}`);
+  form.append("description", "Temporary voice clone for one consented Another Me prototype response.");
+  form.append("files", new Blob([audio], { type }), `voice-sample.${extension}`);
+
+  let voiceId = "";
+  try {
+    const cloneResponse = await fetch(`${elevenBase}/voices/add`, {
+      method: "POST", headers: { "xi-api-key": apiKey }, body: form
+    });
+    const clone = await readJson(cloneResponse, "ElevenLabs", "temporary voice cloning");
+    voiceId = clone.voice_id || "";
+    if (!voiceId) throw externalError("ElevenLabs", "ElevenLabs did not return a temporary voice ID.");
+
+    const speechResponse = await fetch(`${elevenBase}/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
+      method: "POST",
+      headers: { "xi-api-key": apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: text.trim(), model_id: "eleven_multilingual_v2",
+        voice_settings: { stability: 0.62, similarity_boost: 0.9, style: 0, use_speaker_boost: true }
+      })
+    });
+    if (!speechResponse.ok) await readJson(speechResponse, "ElevenLabs", "cloned speech generation");
+    const speech = Buffer.from(await speechResponse.arrayBuffer());
+    if (!speech.length) throw externalError("ElevenLabs", "ElevenLabs returned empty cloned speech.");
+    return speech;
+  } finally {
+    if (voiceId) await quietDelete(`${elevenBase}/voices/${encodeURIComponent(voiceId)}`, { "xi-api-key": apiKey });
+  }
+}
+
+function didHeaders(extra = {}) {
+  if (!process.env.DID_API_KEY) throw externalError("D-ID", "DID_API_KEY is missing on the integration server.", 503);
+  return { Authorization: `Basic ${process.env.DID_API_KEY}`, ...extra };
+}
+
+async function uploadDidResource(kind, buffer, type, extension) {
+  const form = new FormData();
+  form.append(kind, new Blob([buffer], { type }), `temporary-${kind}.${extension}`);
+  const response = await fetch(`${didBase}/${kind === "image" ? "images" : "audios"}`, {
+    method: "POST", headers: didHeaders(), body: form
+  });
+  const result = await readJson(response, "D-ID", `${kind} upload`);
+  const url = result.url || result.source_url || result.audio_url;
+  if (!url) throw externalError("D-ID", `D-ID uploaded the ${kind} but returned no temporary URL.`);
+  return { id: result.id || "", url };
+}
+
+function wait(milliseconds) { return new Promise(resolve => setTimeout(resolve, milliseconds)); }
+
+async function createTalkingAvatar(image, imageType, audio, audioType) {
+  const imageExtension = imageExtensions.get(imageType);
+  if (!imageExtension) throw externalError("D-ID", "The avatar image must be a JPEG or PNG.", 415);
+  if (audioType !== "audio/mpeg") throw externalError("D-ID", "The cloned avatar audio must be MP3.", 415);
+  if (!image.length || !audio.length) throw externalError("D-ID", "The avatar image or cloned audio is empty.", 400);
+
+  let uploadedImage = null;
+  let uploadedAudio = null;
+  let talkId = "";
+  try {
+    uploadedImage = await uploadDidResource("image", image, imageType, imageExtension);
+    uploadedAudio = await uploadDidResource("audio", audio, audioType, "mp3");
+    const talkResponse = await fetch(`${didBase}/talks`, {
+      method: "POST",
+      headers: didHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        source_url: uploadedImage.url,
+        script: { type: "audio", audio_url: uploadedAudio.url },
+        name: "Another Me Temporary Response"
+      })
+    });
+    const talk = await readJson(talkResponse, "D-ID", "talking-avatar creation");
+    talkId = talk.id || "";
+    if (!talkId) throw externalError("D-ID", "D-ID did not return a talking-avatar job ID.");
+
+    let resultUrl = "";
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await wait(3000);
+      const statusResponse = await fetch(`${didBase}/talks/${encodeURIComponent(talkId)}`, { headers: didHeaders() });
+      const status = await readJson(statusResponse, "D-ID", "talking-avatar status check");
+      if (status.status === "done") { resultUrl = status.result_url || ""; break; }
+      if (["error", "failed", "rejected"].includes(status.status)) {
+        throw externalError("D-ID", "D-ID could not animate this image. Use a clear, front-facing portrait or play the cloned audio instead.", 422);
+      }
+    }
+    if (!resultUrl) throw externalError("D-ID", "D-ID did not finish the talking avatar within three minutes.", 504);
+    const videoResponse = await fetch(resultUrl);
+    if (!videoResponse.ok) throw externalError("D-ID", "The completed D-ID video could not be downloaded.");
+    const video = Buffer.from(await videoResponse.arrayBuffer());
+    if (!video.length) throw externalError("D-ID", "D-ID returned an empty video.");
+    return video;
+  } finally {
+    if (talkId) await quietDelete(`${didBase}/talks/${encodeURIComponent(talkId)}`, didHeaders());
+    if (uploadedAudio?.id) await quietDelete(`${didBase}/audios/${encodeURIComponent(uploadedAudio.id)}`, didHeaders());
+    if (uploadedImage?.id) await quietDelete(`${didBase}/images/${encodeURIComponent(uploadedImage.id)}`, didHeaders());
+  }
+}
+
+module.exports = { audioExtensions, createClonedSpeech, createTalkingAvatar, imageExtensions };
