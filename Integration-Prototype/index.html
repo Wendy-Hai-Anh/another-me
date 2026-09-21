@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Another Me | Integration Prototype</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/script.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="masthead">
+      <p class="eyebrow">ANOTHER ME / INTEGRATION TEST</p>
+      <h1>How much of you can a system make?</h1>
+      <p>Six short conversations. You can skip, correct, inspect or delete your information at any point.</p>
+    </header>
+    <div class="utility" aria-label="Session controls">
+      <button type="button" data-action="view-data">View My Data</button>
+      <button type="button" data-action="delete-session" class="danger">Delete Session</button>
+      <button type="button" data-action="end">End Experience</button>
+    </div>
+    <section class="progress" aria-label="Journey progress">
+      <div class="progress-heading"><strong id="progressName"></strong><span id="progressEmotion"></span></div>
+      <ol id="progressSteps"></ol>
+    </section>
+    <main id="stage" tabindex="-1"></main>
+    <p id="status" role="status" aria-live="polite"></p>
+    <nav class="navigation" aria-label="Stage navigation">
+      <button type="button" data-action="back">Back</button>
+      <div>
+        <button type="button" data-action="skip">Skip</button>
+        <button type="button" data-action="continue" class="primary">Continue</button>
+      </div>
+    </nav>
+  </div>
+  <dialog id="dataDialog" aria-labelledby="dataTitle">
+    <div class="dialog-head"><h2 id="dataTitle">My session data</h2><button type="button" data-action="close-data">Close</button></div>
+    <div id="dataContent"></div>
+  </dialog>
+</body>
+</html>
