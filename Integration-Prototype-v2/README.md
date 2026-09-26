@@ -2,6 +2,8 @@
 
 This folder is a separate copy of the six-stage integration test with service-specific loading, timeout, error and fallback handling. Earlier prototype folders remain unchanged. The normal URL uses server-side OpenAI generation. Append `?mode=mock` for clearly labelled simulated text without OpenAI profile/generation calls. Nothing is written to a database or browser storage.
 
+The experience opens with the Week 9 assignment title and a short caption for each stage. Finishing Stage 6 displays a development-status screen that separates working, partially working and still-in-development features. Camera consent is demonstrated with one explicit Enable Camera action rather than a redundant two-step prompt.
+
 ## Run
 
 From the `another-me` repository root:
@@ -17,6 +19,7 @@ Run synthetic tests with:
 ```powershell
 node Integration-Prototype-v2/tests/journey.test.cjs
 node Integration-Prototype-v2/tests/resilience.test.cjs
+node Integration-Prototype-v2/tests/openai-adapter.test.cjs
 node Integration-Prototype-v2/tests/server.test.cjs
 node Integration-Prototype-v2/tests/media-service.test.cjs
 ```
@@ -34,10 +37,10 @@ Each operation has an independent record in `sessionState.operations` with exact
 | OpenAI prediction | 60 seconds |
 | OpenAI proxy response | 60 seconds |
 | OpenAI fictional generation | 60 seconds |
-| ElevenLabs clone and speech | 120 seconds |
-| D-ID animation | 210 seconds |
+| ElevenLabs clone and speech | 180 seconds |
+| D-ID animation | 360 seconds |
 
-The server additionally limits OpenAI calls to 90 seconds, ElevenLabs clone creation to 60 seconds, ElevenLabs speech to 90 seconds, each D-ID upload/create request to 60 seconds, each D-ID poll to 30 seconds and the completed-video download to 60 seconds. Browser timeout values can be overridden before `script.js` loads with `globalThis.__ANOTHER_ME_TIMEOUTS__` for automated tests.
+The server additionally limits OpenAI calls to 90 seconds, ElevenLabs clone creation to 60 seconds, ElevenLabs speech to 90 seconds, each D-ID upload/create request to 60 seconds, each D-ID poll to 30 seconds, D-ID job polling to four minutes and the completed-video download to 60 seconds. D-ID cleanup requests run in parallel so they do not add three sequential waits. Browser timeout values can be overridden before `script.js` loads with `globalThis.__ANOTHER_ME_TIMEOUTS__` for automated tests.
 
 Fallbacks preserve the recording when transcription fails, preserve the last valid profile when OpenAI analysis fails, retain generated text when ElevenLabs fails, and retain a still portrait plus cloned audio when D-ID fails. If both media services fail, Stage 5 remains usable with the still portrait and text or text alone. Mock outputs are visibly marked and are never reported as successful live API results.
 
@@ -74,6 +77,6 @@ Camera, microphone, transcription, proxy response, fictional generation, voice c
 
 Deleting a session stops all media tracks, aborts in-flight requests, revokes object URLs and clears the in-memory state. It never touches files. Closing the page also releases active media. Back navigation preserves confirmed answers; changing supplied text invalidates downstream AI outputs so they cannot silently use stale evidence.
 
-The visual contents of a supplied image are not analyzed for personality. D-ID uses the image only for the separately consented animation step. Instant-clone quality depends strongly on the sample: ElevenLabs recommends longer clean recordings than a single short answer, so this prototype can sound approximate. Mock fiction remains clearly marked; real Stage 5 and 6 generation also receives the temporary profile, participant corrections, prediction and comparison context.
+The visual contents of a supplied image are not analyzed for personality. D-ID uses the image only for the separately consented animation step. Instant-clone quality depends strongly on the sample: ElevenLabs recommends longer clean recordings than a single short answer, so this prototype can sound approximate. Talking-double speech is limited to three concise sentences to reduce render time. Stage 6 returns a structured fictional memory with participant fragments separated from 2-3 concrete AI-invented details; every invented detail must appear in the memory and must not appear in the supplied answers.
 
 API failures show a specific safe error and retain completed fallbacks. Append `?fail=openai`, `?fail=transcription`, `?fail=elevenlabs` or `?fail=did` to simulate failures. A D-ID failure preserves cloned audio instead of silently switching to standard speech. Synthetic tests do not consume vendor credits; a participant must complete the consented browser flow to verify the live account plans, media quality and provider moderation.

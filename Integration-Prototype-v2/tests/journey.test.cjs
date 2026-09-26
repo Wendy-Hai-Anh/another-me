@@ -6,7 +6,7 @@ const vm = require("node:vm");
 const { validateIdentityProfile, validatePrediction } = require("../server/schemas.cjs");
 
 const script = fs.readFileSync(path.join(__dirname, "..", "script.js"), "utf8");
-function harness({ mode = "mock", fail = "", cameraError, micError, transcript, mediaSuccess = false, didFailure = false } = {}) {
+function harness({ mode = "mock", fail = "", cameraError, micError, transcript, mediaSuccess = false, didFailure = false, started = true } = {}) {
   const elements = new Map();
   const stopped = [];
   const requests = [];
@@ -67,8 +67,33 @@ function harness({ mode = "mock", fail = "", cameraError, micError, transcript, 
   context.addEventListener = () => {};
   vm.runInContext(script, context, { filename: "script.js" });
   const run = expression => vm.runInContext(expression, context);
+  if (started) run("sessionState.started = true; render()");
   return { run, elements, stopped, requests };
 }
+
+test("opening page introduces all stages and completion shows development status", () => {
+  const h = harness({ started: false });
+  assert.equal(h.run("sessionState.started"), false);
+  assert.match(h.elements.get("stage").innerHTML, /Another Me — Assignment 2 Progress Prototype/);
+  assert.match(h.elements.get("stage").innerHTML, /Mid-development build, Week 9/);
+  for (const title of ["I SEE YOU", "I LISTEN TO YOU", "I THINK I KNOW YOU", "I CAN PREDICT YOU", "I CAN BE YOU", "I DON’T NEED YOU"]) {
+    assert.match(h.elements.get("stage").innerHTML, new RegExp(title));
+  }
+  assert.equal(h.elements.get('[data-action="continue"]').textContent, "Begin Prototype");
+  h.run('move("continue")');
+  assert.equal(h.run("sessionState.started"), true);
+  assert.equal(h.run("sessionState.currentStage"), 1);
+  h.run("sessionState.currentStage = 6; sessionState.finished = true; render()");
+  assert.match(h.elements.get("stage").innerHTML, /Working/);
+  assert.match(h.elements.get("stage").innerHTML, /Partially working/);
+  assert.match(h.elements.get("stage").innerHTML, /Still in development/);
+  assert.match(h.elements.get("stage").innerHTML, /voice cloning, D-ID animation and UI\/UX refinement/i);
+  h.run('move("back")');
+  assert.equal(h.run("sessionState.finished"), false);
+  assert.equal(h.run("sessionState.currentStage"), 6);
+  h.run("deleteSession()");
+  assert.equal(h.run("sessionState.started"), false);
+});
 
 test("complete mock journey keeps labels, ordering and final feedback", async () => {
   const h = harness();
@@ -92,7 +117,17 @@ test("complete mock journey keeps labels, ordering and final feedback", async ()
   assert.match(h.run("renderProxy()"), /GENERATED ON YOUR BEHALF/);
   h.run('move("continue"); sessionState.consent.fictionalGeneration = true');
   await h.run("generateFiction()");
-  assert.match(h.run("renderFiction()"), /FICTIONAL AI-GENERATED CONTENT/);
+  const fiction = h.run("sessionState.generated.fictionalContent[0]");
+  const fictionMarkup = h.run("renderFiction()");
+  assert.equal(fiction.details_invented_by_ai.length, 3);
+  assert.ok(fiction.details_borrowed_from_user.length >= 1);
+  for (const detail of fiction.details_invented_by_ai) {
+    assert.match(fiction.fictional_memory, new RegExp(detail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+    assert.ok(!answers.some(answer => answer.answer.toLowerCase().includes(detail.toLowerCase())));
+  }
+  assert.match(fictionMarkup, /FICTIONAL AI-GENERATED CONTENT/);
+  assert.match(fictionMarkup, /Concrete details invented by AI/);
+  assert.match(fictionMarkup, /This is fictional and was not supplied by you/);
   h.run('sessionState.feedback.feelsLikeYou = "Unsure"; move("continue")');
   assert.equal(h.run("sessionState.finished"), true);
 });

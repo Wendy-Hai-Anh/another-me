@@ -74,6 +74,7 @@ function harness({ search = "?dev=1", fetchMode = "success" } = {}) {
   context.window = context;
   context.addEventListener = () => {};
   vm.runInContext(script, context, { filename: "script.js" });
+  vm.runInContext("sessionState.started = true; render()", context);
   return { run: expression => vm.runInContext(expression, context), context, elements, stopped, errors };
 }
 
@@ -81,7 +82,7 @@ test("operation registry begins idle and exposes configurable service timeouts",
   const h = harness();
   assert.deepEqual([...h.run("new Set(Object.values(sessionState.operations).map(item => item.state))")], ["idle"]);
   assert.equal(h.run("__anotherMeDev.timeoutValues().did"), 20);
-  assert.equal(h.run("operationDefinitions.did.timeoutMs"), 210_000);
+  assert.equal(h.run("operationDefinitions.did.timeoutMs"), 360_000);
 });
 
 test("loading blocks duplicate work and becomes success", async () => {

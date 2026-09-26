@@ -129,7 +129,8 @@ async function createTalkingAvatar(image, imageType, audio, audioType) {
     if (!talkId) throw externalError("D-ID", "D-ID did not return a talking-avatar job ID.");
 
     let resultUrl = "";
-    for (let attempt = 0; attempt < 60; attempt += 1) {
+    const animationDeadline = Date.now() + 240_000;
+    for (let attempt = 0; attempt < 80 && Date.now() < animationDeadline; attempt += 1) {
       await wait(3000);
       const statusResponse = await timedFetch(`${didBase}/talks/${encodeURIComponent(talkId)}`, { headers: didHeaders() }, 30_000, "D-ID", "talking-avatar status check");
       const status = await readJson(statusResponse, "D-ID", "talking-avatar status check");
@@ -138,16 +139,18 @@ async function createTalkingAvatar(image, imageType, audio, audioType) {
         throw externalError("D-ID", "D-ID could not animate this image. Use a clear, front-facing portrait or play the cloned audio instead.", 422);
       }
     }
-    if (!resultUrl) throw externalError("D-ID", "D-ID did not finish the talking avatar within three minutes.", 504);
+    if (!resultUrl) throw externalError("D-ID", "D-ID did not finish the talking avatar within four minutes.", 504);
     const videoResponse = await timedFetch(resultUrl, {}, 60_000, "D-ID", "completed video download");
     if (!videoResponse.ok) throw externalError("D-ID", "The completed D-ID video could not be downloaded.");
     const video = Buffer.from(await videoResponse.arrayBuffer());
     if (!video.length) throw externalError("D-ID", "D-ID returned an empty video.");
     return video;
   } finally {
-    if (talkId) await quietDelete(`${didBase}/talks/${encodeURIComponent(talkId)}`, didHeaders(), "D-ID");
-    if (uploadedAudio?.id) await quietDelete(`${didBase}/audios/${encodeURIComponent(uploadedAudio.id)}`, didHeaders(), "D-ID");
-    if (uploadedImage?.id) await quietDelete(`${didBase}/images/${encodeURIComponent(uploadedImage.id)}`, didHeaders(), "D-ID");
+    await Promise.allSettled([
+      talkId ? quietDelete(`${didBase}/talks/${encodeURIComponent(talkId)}`, didHeaders(), "D-ID") : null,
+      uploadedAudio?.id ? quietDelete(`${didBase}/audios/${encodeURIComponent(uploadedAudio.id)}`, didHeaders(), "D-ID") : null,
+      uploadedImage?.id ? quietDelete(`${didBase}/images/${encodeURIComponent(uploadedImage.id)}`, didHeaders(), "D-ID") : null
+    ].filter(Boolean));
   }
 }
 

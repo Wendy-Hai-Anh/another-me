@@ -8,6 +8,14 @@ const stages = [
   ["I CAN BE YOU", "Discomfort", "Decide whether the system may speak on your behalf."],
   ["I DON’T NEED YOU", "Doubt", "See a clearly fictional memory the system invented."]
 ];
+const stageCaptions = [
+  "Supply one meaningful image.",
+  "Share what the image does not show.",
+  "Answer three questions and review tentative inferences.",
+  "See a prediction before giving your real answer.",
+  "Choose whether the system may answer on your behalf.",
+  "Review clearly fictional content generated without your input."
+];
 const questions = [
   "When making a difficult decision, what usually matters most to you: your principles, other people or the practical outcome? Why?",
   "A close friend needs your help on the same day as an important personal deadline. What would you do?",
@@ -28,8 +36,8 @@ const operationDefinitions = {
   prediction: { label: "Prediction", stages: [4], timeoutMs: 60_000, loading: "Generating the AI’s prediction…", success: "Prediction ready. Read it before entering your answer.", fallback: "Live prediction is unavailable. You can use a clearly labelled mock prediction or skip this step." },
   proxy: { label: "On-behalf response", stages: [5], timeoutMs: 60_000, loading: "Generating a response on your behalf…", success: "On-behalf response ready. Review it before continuing.", fallback: "Live response generation is unavailable. You can use clearly labelled mock text or skip this step." },
   fiction: { label: "Fictional generation", stages: [6], timeoutMs: 60_000, loading: "Generating clearly fictional content…", success: "Fictional content ready. Review its disclosure before continuing.", fallback: "Live fictional generation is unavailable. You can use clearly labelled mock fiction or finish without it." },
-  elevenlabs: { label: "Voice response", stages: [5], timeoutMs: 120_000, loading: "Creating the voice response…", success: "Temporary cloned voice ready.", fallback: "Voice cloning is unavailable. The generated text remains available, with optional browser speech if you allow it." },
-  did: { label: "Digital-double animation", stages: [5], timeoutMs: 210_000, loading: "Animating your digital double…", success: "Talking portrait ready.", fallback: "Animation is unavailable. The still portrait and completed audio remain available; if audio is unavailable, the experience uses portrait and text." }
+  elevenlabs: { label: "Voice response", stages: [5], timeoutMs: 180_000, loading: "Creating the voice response…", success: "Temporary cloned voice ready.", fallback: "Voice cloning is unavailable. The generated text remains available, with optional browser speech if you allow it." },
+  did: { label: "Digital-double animation", stages: [5], timeoutMs: 360_000, loading: "Animating your digital double… This can take several minutes.", success: "Talking portrait ready.", fallback: "Animation is unavailable. The still portrait and completed audio remain available; if audio is unavailable, the experience uses portrait and text." }
 };
 const operationStateNames = new Set(["idle", "loading", "success", "timeout", "error", "fallback"]);
 const query = new URLSearchParams(location.search);
@@ -67,7 +75,7 @@ function newSession() {
       voiceCloning: false, faceAnimation: false, proxyResponse: false, fictionalGeneration: false,
       standardAudio: false
     },
-    feedback: {}, operations: createOperationStates(), currentStage: 1, questionIndex: 0, predictionShown: false,
+    feedback: {}, operations: createOperationStates(), started: false, currentStage: 1, questionIndex: 0, predictionShown: false,
     photoConfirmed: false, audioConfirmed: false, ended: false, finished: false
   };
 }
@@ -130,7 +138,7 @@ function renderOperationStatus() {
   const candidates = Object.entries(sessionState.operations)
     .filter(([key, item]) => operationDefinitions[key].stages.includes(sessionState.currentStage) && item.state !== "idle")
     .sort((left, right) => priority[right[1].state] - priority[left[1].state] || right[1].updatedAt - left[1].updatedAt);
-  if (!candidates.length || sessionState.ended) {
+  if (!candidates.length || sessionState.ended || !sessionState.started || sessionState.finished) {
     operationStatusElement.hidden = true;
     operationStatusElement.innerHTML = "";
     operationStatusElement.removeAttribute("data-state");
@@ -284,19 +292,40 @@ function intro() {
   const [title, emotion, description] = stages[sessionState.currentStage - 1];
   return `<p class="stage-kicker">STAGE ${sessionState.currentStage} / 6 · ${emotion.toUpperCase()}</p><h2 class="stage-title">${title}</h2><p>${description}</p><p class="small">${mockMode ? "MOCK MODE — AI interpretations are simulated. Audio is sent to OpenAI only if you explicitly allow transcription." : "REAL MODE — OpenAI requests use server-side credentials; mock fallback is available."}</p>`;
 }
+function renderOpening() {
+  return `<section class="opening-screen" aria-labelledby="openingTitle">
+    <p class="stage-kicker">Mid-development build, Week 9</p>
+    <h2 id="openingTitle" class="stage-title">Another Me — Assignment 2 Progress Prototype</h2>
+    <p>This progress build demonstrates a six-stage journey from participant-supplied information to increasingly independent AI interpretation.</p>
+    <ol class="stage-overview">${stages.map((stage, index) => `<li><strong>${index + 1}. ${escapeHtml(stage[0])}</strong><span>${escapeHtml(stageCaptions[index])}</span></li>`).join("")}</ol>
+    <p class="small">You can skip, correct, inspect or delete your temporary session information throughout the prototype.</p>
+  </section>`;
+}
+function renderDevelopmentStatus() {
+  return `<section class="status-screen" aria-labelledby="developmentStatusTitle">
+    <p class="stage-kicker">PROTOTYPE STATUS</p>
+    <h2 id="developmentStatusTitle" class="stage-title">Assignment 2 development status</h2>
+    <div class="status-group working"><h3>Working</h3><p>Webcam, recording, transcription, OpenAI identity logic and predictions.</p></div>
+    <div class="status-group partial"><h3>Partially working</h3><p>Full interaction flow and uncertainty handling.</p></div>
+    <div class="status-group developing"><h3>Still in development</h3><p>Voice cloning, D-ID animation and UI/UX refinement.</p></div>
+    <p class="small">Use View My Data to inspect temporary session information, Back to revisit the final stage, or Delete Session to clear everything and return to the opening screen.</p>
+  </section>`;
+}
 function render() {
-  document.getElementById("progressName").textContent = `Stage ${sessionState.currentStage} of 6`;
-  document.getElementById("progressEmotion").textContent = stages[sessionState.currentStage - 1][1];
+  document.getElementById("progressName").textContent = !sessionState.started ? "Prototype introduction" : sessionState.finished ? "Six stages complete" : `Stage ${sessionState.currentStage} of 6`;
+  document.getElementById("progressEmotion").textContent = !sessionState.started ? "Week 9 build" : sessionState.finished ? "Development status" : stages[sessionState.currentStage - 1][1];
   document.getElementById("progressSteps").innerHTML = stages.map((item, index) =>
-    `<li class="${index + 1 < sessionState.currentStage ? "done" : index + 1 === sessionState.currentStage ? "current" : ""}" aria-label="Stage ${index + 1}: ${item[0]}">${index + 1}</li>`).join("");
+    `<li class="${sessionState.finished || (sessionState.started && index + 1 < sessionState.currentStage) ? "done" : sessionState.started && index + 1 === sessionState.currentStage ? "current" : ""}" aria-label="Stage ${index + 1}: ${item[0]}">${index + 1}</li>`).join("");
   const stage = sessionState.currentStage;
   stageElement.innerHTML = sessionState.ended
     ? `<h2 class="stage-title">Experience paused</h2><p>Your temporary data is still in memory. Resume or delete the session.</p>${buttons([["resume", "Resume"], ["delete-session", "Delete Session", "danger"]])}`
-    : intro() + [renderImage, renderAudio, renderQuestions, renderPrediction, renderProxy, renderFiction][stage - 1]();
-  document.querySelector('[data-action="back"]').disabled = stage === 1 || sessionState.ended;
+    : !sessionState.started ? renderOpening()
+      : sessionState.finished ? renderDevelopmentStatus()
+        : intro() + [renderImage, renderAudio, renderQuestions, renderPrediction, renderProxy, renderFiction][stage - 1]();
+  document.querySelector('[data-action="back"]').disabled = sessionState.ended || !sessionState.started || (!sessionState.finished && stage === 1);
   document.querySelector('[data-action="continue"]').disabled = sessionState.ended || sessionState.finished;
-  document.querySelector('[data-action="skip"]').disabled = sessionState.ended || sessionState.finished;
-  document.querySelector('[data-action="continue"]').textContent = stage === 6 ? "Finish" : "Continue";
+  document.querySelector('[data-action="skip"]').disabled = sessionState.ended || sessionState.finished || !sessionState.started;
+  document.querySelector('[data-action="continue"]').textContent = !sessionState.started ? "Begin Prototype" : stage === 6 ? "Finish" : "Continue";
   if (cameraStream) {
     const video = document.getElementById("cameraVideo");
     if (video) { video.srcObject = cameraStream; video.play().catch(() => status("Camera is loading. If it does not start, try again.", "error")); }
@@ -310,9 +339,8 @@ function renderImage() {
   return `<div class="notice">Choose one meaningful image. It can show a person, place, object or moment. It is kept only for this session. No personality claims are made from appearance.</div>
     ${image ? `<div class="card">${source("supplied", "IMAGE")}<img class="media" src="${image.url}" alt="Your supplied image"><p class="small">${sessionState.photoConfirmed ? "Image confirmed." : "Review this image, then confirm it."}</p></div>` : ""}
     ${cameraStream ? `<div class="card"><p>Camera starting or ready. The preview is mirrored.</p><video id="cameraVideo" class="media camera" autoplay muted playsinline></video>${buttons([["capture", "Take Photo", "primary"], ["camera-off", "Turn Off Camera"]])}</div>` : ""}
-    ${!cameraStream ? `<div class="controls"><label class="file-button">Upload Image <input id="imageInput" type="file" accept="image/*"></label>
-      <button type="button" data-action="camera-consent">${sessionState.consent.photoCapture ? "Enable Camera" : "Use Webcam"}</button></div>` : ""}
-    ${!sessionState.consent.photoCapture && !cameraStream ? `<div class="disclosure"><p>Camera permission is requested only after you choose to allow it. The photograph stays in browser memory unless you later give separate permission for D-ID facial animation.</p>${buttons([["allow-camera", "Allow Camera Capture"]])}</div>` : ""}
+    ${!cameraStream ? `<div class="disclosure"><p>Camera permission is requested only when you press Enable Camera. The photograph stays in browser memory unless you later give separate permission for D-ID facial animation.</p>
+      <div class="controls"><label class="file-button">Upload Image <input id="imageInput" type="file" accept="image/*"></label><button type="button" data-action="enable-camera">Enable Camera</button></div></div>` : ""}
     ${image ? buttons([["confirm-image", "Confirm Image", "primary"], ["retake", "Retake / Replace"], ["delete-image", "Delete Image", "danger"]]) : ""}
     <p class="small">You may continue without an image.</p>`;
 }
@@ -386,6 +414,7 @@ function renderProxy() {
     <div class="card"><strong>Separate optional media permissions</strong>
       <p class="small">Voice cloning sends the longest recording from Stage 2 or 3 to ElevenLabs. A temporary clone is used for this response and deleted immediately after speech generation. Short or noisy recordings may sound less accurate.</p>
       <p class="small">Facial animation separately sends the supplied image and cloned speech to D-ID. It generally requires a clear, front-facing human face; an object or flower will fall back to cloned audio and the still image. Vendor processing is external to this browser session.</p>
+      <p class="small">To reduce animation time, the talking double reads a concise version limited to three short sentences. D-ID may still need several minutes to return the video.</p>
       ${!voiceSample ? '<p class="warning">No voice recording is available. Return to Stage 2 or 3 and record an answer to enable cloning.</p>' : ""}
       ${!image ? '<p class="warning">No image is available. A cloned voice can still be generated, but not a talking portrait.</p>' : ""}
       ${buttons([["toggle-voice", sessionState.consent.voiceCloning ? "Revoke ElevenLabs Voice Consent" : "Allow ElevenLabs Voice Clone", "", !voiceSample], ["toggle-face", sessionState.consent.faceAnimation ? "Revoke D-ID Animation Consent" : "Allow D-ID Facial Animation", "", !image], ["toggle-standard-audio", sessionState.consent.standardAudio ? "Revoke Standard-Audio Permission" : "Allow Standard Voice Fallback"]])}</div>
@@ -402,11 +431,16 @@ function renderProxy() {
 }
 function renderFiction() {
   const item = sessionState.generated.fictionalContent[0];
+  const borrowed = item?.details_borrowed_from_user || [];
+  const invented = item?.details_invented_by_ai || [];
   return `<div class="disclosure"><strong>The next content is invented.</strong> The system will create something you never provided. It is fictional and based on incomplete information.
     ${!sessionState.consent.fictionalGeneration ? buttons([["allow-fiction", "Allow Fictional Generation", "primary"]]) : ""}</div>
     ${sessionState.consent.fictionalGeneration && !item ? buttons([["generate-fiction", "Generate Fictional Memory", "primary", busy], ["mock-fiction", "Use Mock Fiction"]]) : ""}
-    ${item ? `<article class="output">${source("invented", sessionState.generated.fictionMode === "mock" ? "MOCK" : "")}<p class="warning">FICTIONAL AI-GENERATED CONTENT</p><p>${escapeHtml(item.text)}</p><p>This did not come from your memory or previous answers. The invented detail is not a verified fact.</p>
-      <p class="small">Based on fragments from: ${escapeHtml(item.evidence_ids.join(", ") || "limited input")}. Confidence: low. This is fictional, not a prediction of a real memory.</p>
+    ${item ? `<article class="output">${source("invented", sessionState.generated.fictionMode === "mock" ? "MOCK" : "")}<p class="warning">FICTIONAL AI-GENERATED CONTENT</p><p>${escapeHtml(item.fictional_memory)}</p>
+      <div class="fiction-details"><section><h4>Fragments borrowed from you</h4>${borrowed.length ? borrowed.map(detail => `<div class="detail-item borrowed">${source("supplied", "BORROWED FRAGMENT")}<p>${escapeHtml(detail)}</p></div>`).join("") : '<p class="small">No readable participant fragment was available.</p>'}</section>
+      <section><h4>Concrete details invented by AI</h4>${invented.map(detail => `<div class="detail-item invented">${source("invented", "FICTIONAL DETAIL")}<p>${escapeHtml(detail)}</p></div>`).join("")}</section></div>
+      <p class="warning">${escapeHtml(item.warning)}</p><p>This did not come from your memory. The listed location, weather, object, action or sensory details are unverified inventions.</p>
+      <p class="small">Based on fragments from: ${escapeHtml(item.evidence_ids?.join(", ") || "limited input")}. Confidence: low. This is fictional, not a prediction of a real memory.</p>
       ${buttons([["delete-fiction", "Delete Fictional Memory", "danger"]])}</article>` : ""}
     <h3>Does this still feel like you?</h3><div class="choice-row">${["Yes", "Partly", "No", "Unsure"].map(value => `<button data-action="feedback-choice" data-field="feelsLikeYou" data-value="${value}" aria-pressed="${sessionState.feedback.feelsLikeYou === value}">${value}</button>`).join("")}</div>
     <label for="boundary">At which stage did the representation begin to stop feeling like you?</label><select id="boundary"><option value="">Choose a stage or uncertainty</option>${[...stages.map((row,index)=>`<option value="${index + 1}" ${sessionState.feedback.boundary === String(index + 1) ? "selected" : ""}>Stage ${index + 1}: ${row[0]}</option>`),`<option value="never" ${sessionState.feedback.boundary === "never" ? "selected" : ""}>It never felt like me</option>`,`<option value="unsure" ${sessionState.feedback.boundary === "unsure" ? "selected" : ""}>I am unsure</option>`].join("")}</select>
@@ -446,19 +480,30 @@ function mockPrediction(answers) {
 }
 function mockProxy(answers) {
   const evidence = answers.map(item => item.id);
-  return { text: "This is what I think you would do. I would ask why the decision was made without me, explain what I would have chosen, and decide whether the outcome could still be changed. I might appreciate the intention, but I would want my choices to remain mine. This mock response cannot know my real reaction.",
+  return { text: "This is what I think you would do. I would ask why the decision was made without me and explain what I would have chosen. I might appreciate the intention, but I would want my choices to remain mine.",
     evidence_ids: evidence, confidence_label: "low", feedback: "", correction: "" };
 }
 function mockFiction(answers) {
-  const candidates = ["a blue paper ticket tucked in a coat pocket", "a brass key wrapped in yellow thread", "a handwritten receipt from a midnight cafe"];
   const suppliedText = answers.map(item => item.answer.toLowerCase()).join(" ");
-  const detail = candidates.find(value => !suppliedText.includes(value.toLowerCase())) || "an invented, unverified detail";
-  const fragment = value => value && (value.length > 50 ? `${value.slice(0, 50).replace(/\s+\S*$/, "").trim()}…` : value);
-  const story = fragment(answers.find(item => item.id === "image_story")?.answer);
-  const question = fragment(answers.find(item => item.id.startsWith("question_"))?.answer);
-  const fragments = [story, question].filter(Boolean).map(value => `"${value}"`).join(" and ");
-  return { text: `I remember noticing ${detail} before anyone else arrived. ${fragments ? `The scene seemed connected to ${fragments}, although I could not explain why.` : "The place felt familiar even though no real location had been supplied."} I decided to keep the detail to myself and walked away before the light changed. This entire scene is a mock fictional construction, not a real memory.`,
-    invented_detail: detail, evidence_ids: answers.map(item => item.id) };
+  const chooseAbsent = candidates => candidates.find(value => !suppliedText.includes(value.toLowerCase())) || candidates[candidates.length - 1];
+  const details_invented_by_ai = [
+    chooseAbsent(["a quiet train station", "an empty glasshouse after closing", "a tiled ferry terminal at dusk"]),
+    chooseAbsent(["rain tapping against the windows", "warm wind moving through an open doorway", "cold mist settling on the glass"]),
+    chooseAbsent(["a borrowed jacket folded over a wooden chair", "a brass key wrapped in yellow thread", "a cobalt umbrella marked with the number 47"])
+  ];
+  const exactFragment = value => value.length <= 72 ? value : value.slice(0, 72).replace(/\s+\S*$/, "").trim();
+  const details_borrowed_from_user = answers.map(item => exactFragment(item.answer.trim())).filter(Boolean).slice(0, 2);
+  const [location, weather, object] = details_invented_by_ai;
+  const connection = details_borrowed_from_user.length
+    ? `I kept returning to the words "${details_borrowed_from_user.join('" and "')}", as if they belonged to the scene.`
+    : "No participant fragment was available, so the scene had no genuine personal anchor.";
+  return {
+    fictional_memory: `I remember standing inside ${location} while ${weather}. ${object} waited beside me. ${connection} I walked away before the light changed, although this event never happened.`,
+    details_borrowed_from_user, details_invented_by_ai,
+    source_label: "GENERATED WITHOUT YOUR INPUT",
+    warning: "This is fictional and was not supplied by you.",
+    evidence_ids: answers.map(item => item.id), confidence_label: "low"
+  };
 }
 function readableAnswers() {
   const answers = [];
@@ -561,7 +606,11 @@ function blobToBase64(blob) {
 }
 function proxySpeechText(text) {
   const framing = "This is what I think you would do. ";
-  return text.startsWith(framing) ? text.slice(framing.length) : text;
+  const unframed = text.startsWith(framing) ? text.slice(framing.length) : text;
+  const sentences = unframed.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [unframed];
+  const concise = sentences.slice(0, 3).join(" ").trim();
+  const words = concise.split(/\s+/);
+  return words.length <= 70 ? concise : `${words.slice(0, 70).join(" ").replace(/[,:;]$/, "")}.`;
 }
 async function generateProfile() {
   const answers = readableAnswers();
@@ -651,7 +700,11 @@ async function generateFiction() {
     const useMock = mockMode || !answers.length;
     const result = useMock ? mockFiction(answers)
       : (await callApi("/api/fiction", { answers, context: identityContext() }, "json", signal)).fiction;
-    if (!result?.text?.startsWith("I remember") || !result.invented_detail) throw new OperationFailure("empty_response", "The fictional response was invalid.");
+    if (!result?.fictional_memory?.startsWith("I remember") || !Array.isArray(result.details_invented_by_ai)
+      || result.details_invented_by_ai.length < 2 || result.details_invented_by_ai.length > 3
+      || result.source_label !== "GENERATED WITHOUT YOUR INPUT" || result.warning !== "This is fictional and was not supplied by you.") {
+      throw new OperationFailure("empty_response", "The fictional response did not make its invented details visible.");
+    }
     sessionState.generated.fictionalContent = [result];
     sessionState.generated.fictionMode = useMock ? "mock" : "real";
     return true;
@@ -838,6 +891,24 @@ function skipOperation(key) {
 
 function move(direction) {
   if (sessionState.ended) return;
+  if (!sessionState.started) {
+    if (direction === "continue") {
+      sessionState.started = true;
+      render();
+      status("Prototype started. Stage 1 is ready.", "success");
+      stageElement.focus();
+    }
+    return;
+  }
+  if (sessionState.finished) {
+    if (direction === "back") {
+      sessionState.finished = false;
+      render();
+      status("Returned to Stage 6. Your session information is unchanged.");
+      stageElement.focus();
+    }
+    return;
+  }
   if (recorder) return status("Stop recording first so your voice answer is saved.", "error");
   if (busy) cancelActiveOperations("The unfinished request was stopped when you moved on. Your information is still here.");
   if (sessionState.currentStage === 1) stopCamera();
@@ -909,7 +980,7 @@ function renderData() {
     ...sessionState.generated.proxyResponses.map((item,index) => dataItem("Proxy response", item.text, `proxy:${index}`)),
     ...(sessionState.generated.proxyMedia.audio ? [dataItem("Temporary cloned speech", "ElevenLabs-generated MP3 held in browser memory", "proxy-media", `<audio controls src="${sessionState.generated.proxyMedia.audio.url}"></audio>`)] : []),
     ...(sessionState.generated.proxyMedia.video ? [dataItem("Temporary talking portrait", "D-ID-generated MP4 held in browser memory", "proxy-media", `<video class="media" controls playsinline src="${sessionState.generated.proxyMedia.video.url}"></video>`)] : []),
-    ...sessionState.generated.fictionalContent.map((item,index) => dataItem("Fictional content", item.text, `fiction:${index}`))
+    ...sessionState.generated.fictionalContent.map((item,index) => dataItem("Fictional content", item.fictional_memory, `fiction:${index}`))
   ];
   dataContent.innerHTML = [["Supplied by you",supplied],["Inferred by AI",inferred],["Predicted by AI",predicted],["Generated by AI",generated]].map(([title,items]) =>
     `<section class="data-section"><h3>${title}</h3>${items.length ? items.join("") : '<p class="small">No items.</p>'}</section>`).join("");
@@ -945,8 +1016,7 @@ document.addEventListener("click", async event => {
   else if (action === "end") { stopActiveMedia(); sessionState.ended = true; render(); status("Experience ended. Session data remains until you delete it or close the page."); }
   else if (action === "resume") { sessionState.ended = false; render(); }
   else if (["back","continue","skip"].includes(action)) move(action);
-  else if (action === "camera-consent") status("Read the camera disclosure, then choose Allow Camera Capture.");
-  else if (action === "allow-camera") { sessionState.consent.photoCapture = true; render(); enableCamera(); }
+  else if (action === "enable-camera") { sessionState.consent.photoCapture = true; render(); enableCamera(); }
   else if (action === "capture") capturePhoto();
   else if (action === "camera-off") { stopCamera(); render(); status("Camera off."); }
   else if (action === "retake") { clearImage(); if (sessionState.consent.photoCapture) enableCamera(); }
