@@ -37,7 +37,7 @@ const operationDefinitions = {
   proxy: { label: "On-behalf response", stages: [5], timeoutMs: 60_000, loading: "Generating a response on your behalf…", success: "On-behalf response ready. Review it before continuing.", fallback: "Live response generation is unavailable. You can use clearly labelled mock text or skip this step." },
   fiction: { label: "Fictional generation", stages: [6], timeoutMs: 60_000, loading: "Generating clearly fictional content…", success: "Fictional content ready. Review its disclosure before continuing.", fallback: "Live fictional generation is unavailable. You can use clearly labelled mock fiction or finish without it." },
   elevenlabs: { label: "Voice response", stages: [5], timeoutMs: 180_000, loading: "Creating the voice response…", success: "Temporary cloned voice ready.", fallback: "Voice cloning is unavailable. The generated text remains available, with optional browser speech if you allow it." },
-  did: { label: "Digital-double animation", stages: [5], timeoutMs: 360_000, loading: "Animating your digital double… This can take several minutes.", success: "Talking portrait ready.", fallback: "Animation is unavailable. The still portrait and completed audio remain available; if audio is unavailable, the experience uses portrait and text." }
+  did: { label: "Digital-double animation", stages: [5], timeoutMs: 480_000, loading: "Animating your digital double… D-ID may remain queued for several minutes before rendering.", success: "Talking portrait ready.", fallback: "Animation is unavailable. The still portrait and completed audio remain available; if audio is unavailable, the experience uses portrait and text." }
 };
 const operationStateNames = new Set(["idle", "loading", "success", "timeout", "error", "fallback"]);
 const query = new URLSearchParams(location.search);
@@ -202,7 +202,9 @@ async function applyDevelopmentScenario(key, signal) {
 }
 function friendlyFailure(key, error) {
   const label = operationDefinitions[key].label;
-  if (error?.code === "timeout") return { state: "timeout", code: "timeout", message: `${label} took too long and was stopped. Your information and completed stages are still here.` };
+  if (error?.code === "timeout") return { state: "timeout", code: "timeout", message: key === "did" && error.message
+    ? `${error.message} Your information and completed stages are still here.`
+    : `${label} took too long and was stopped. Your information and completed stages are still here.` };
   if (error?.name === "NotAllowedError") return { state: "error", code: "permission_denied", message: `${label} permission was denied. You can change the browser permission and retry, or use the fallback.` };
   if (error?.name === "NotFoundError") return { state: "error", code: "device_missing", message: `No ${key === "camera" ? "camera" : "microphone"} was detected. You can connect one and retry, or use the fallback.` };
   if (error?.name === "NotReadableError") return { state: "error", code: "device_busy", message: `The ${key} is already in use by another app. Close that app and try again.` };

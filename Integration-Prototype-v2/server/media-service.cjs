@@ -1,5 +1,7 @@
 const elevenBase = "https://api.elevenlabs.io/v1";
 const didBase = "https://api.d-id.com";
+const didPollIntervalMs = Math.max(250, Number(process.env.DID_POLL_INTERVAL_MS) || 3_000);
+const didRenderTimeoutMs = Math.max(30_000, Number(process.env.DID_RENDER_TIMEOUT_MS) || 330_000);
 
 const audioExtensions = new Map([
   ["audio/webm", "webm"], ["audio/ogg", "ogg"], ["audio/mp4", "m4a"],
@@ -103,6 +105,26 @@ async function uploadDidResource(kind, buffer, type, extension) {
 
 function wait(milliseconds) { return new Promise(resolve => setTimeout(resolve, milliseconds)); }
 
+function didStatusName(result) {
+  return typeof result?.status === "string" ? result.status.toLowerCase() : "unknown";
+}
+
+function didFailureCode(result) {
+  const failure = result?.error || result?.failure;
+  if (typeof failure === "string") return failure.slice(0, 120);
+  if (failure && typeof failure === "object") {
+    return String(failure.kind || failure.code || failure.name || "provider_error").slice(0, 120);
+  }
+  return "provider_error";
+}
+
+async function readDidTalk(talkId) {
+  const response = await timedFetch(`${didBase}/talks/${encodeURIComponent(talkId)}`, {
+    headers: didHeaders()
+  }, 30_000, "D-ID", "talking-avatar status check");
+  return readJson(response, "D-ID", "talking-avatar status check");
+}
+
 async function createTalkingAvatar(image, imageType, audio, audioType) {
   const imageExtension = imageExtensions.get(imageType);
   if (!imageExtension) throw externalError("D-ID", "The avatar image must be a JPEG or PNG.", 415);
@@ -129,17 +151,36 @@ async function createTalkingAvatar(image, imageType, audio, audioType) {
     if (!talkId) throw externalError("D-ID", "D-ID did not return a talking-avatar job ID.");
 
     let resultUrl = "";
-    const animationDeadline = Date.now() + 240_000;
-    for (let attempt = 0; attempt < 80 && Date.now() < animationDeadline; attempt += 1) {
-      await wait(3000);
-      const statusResponse = await timedFetch(`${didBase}/talks/${encodeURIComponent(talkId)}`, { headers: didHeaders() }, 30_000, "D-ID", "talking-avatar status check");
-      const status = await readJson(statusResponse, "D-ID", "talking-avatar status check");
-      if (status.status === "done") { resultUrl = status.result_url || ""; break; }
-      if (["error", "failed", "rejected"].includes(status.status)) {
-        throw externalError("D-ID", "D-ID could not animate this image. Use a clear, front-facing portrait or play the cloned audio instead.", 422);
+    let lastStatus = "created";
+    let lastLoggedStatus = "";
+    const animationDeadline = Date.now() + didRenderTimeoutMs;
+    while (Date.now() < animationDeadline) {
+      await wait(Math.min(didPollIntervalMs, Math.max(0, animationDeadline - Date.now())));
+      const status = await readDidTalk(talkId);
+      lastStatus = didStatusName(status);
+      if (lastStatus !== lastLoggedStatus) {
+        console.info(`[integration-api] D-ID talk ${talkId} status=${lastStatus}`);
+        lastLoggedStatus = lastStatus;
+      }
+      if (lastStatus === "done") {
+        resultUrl = status.result_url || "";
+        if (!resultUrl) throw externalError("D-ID", "D-ID finished the animation but returned no video.", 502);
+        break;
+      }
+      if (["error", "failed", "rejected"].includes(lastStatus)) {
+        console.error(`[integration-api] D-ID talk ${talkId} failure=${didFailureCode(status)}`);
+        throw externalError("D-ID", "D-ID rejected this animation. Try a clear, front-facing portrait or use the still portrait with cloned audio.", 422);
       }
     }
-    if (!resultUrl) throw externalError("D-ID", "D-ID did not finish the talking avatar within four minutes.", 504);
+    if (!resultUrl) {
+      // A queued job can finish on the deadline boundary, so check once more before falling back.
+      const finalStatus = await readDidTalk(talkId);
+      lastStatus = didStatusName(finalStatus);
+      if (lastStatus === "done" && finalStatus.result_url) resultUrl = finalStatus.result_url;
+    }
+    if (!resultUrl) {
+      throw externalError("D-ID", `D-ID remained ${lastStatus === "unknown" ? "queued" : lastStatus} for more than five minutes. The still portrait and cloned audio are still available.`, 504);
+    }
     const videoResponse = await timedFetch(resultUrl, {}, 60_000, "D-ID", "completed video download");
     if (!videoResponse.ok) throw externalError("D-ID", "The completed D-ID video could not be downloaded.");
     const video = Buffer.from(await videoResponse.arrayBuffer());
