@@ -2,7 +2,9 @@
 
 This is a separate participant-facing UI/UX version of the six-stage integration test. Earlier prototype folders remain unchanged. The normal URL uses server-side OpenAI generation. Append `?mode=mock` for clearly labelled simulated text without OpenAI profile/generation calls. Nothing is written to a database or browser storage. See [STORYBOARD.md](STORYBOARD.md) for the audit, visual direction and initial/after states for every scene.
 
-The experience opens with a quiet invitation. Questions appear one at a time; reduced-motion settings reveal them immediately. Stage 3 reveals an interpretation after each answer and allows inline correction. The participant chooses Speak or Type at each question. Stage 4 accepts the actual answer only after the prediction appears, then shows them side by side. Every recording can be stopped, replayed, deleted and transcribed through the local server. If transcription fails, the audio remains available and the answer can be typed.
+The experience opens with a quiet invitation. Questions appear one at a time; reduced-motion settings reveal them immediately. Stage 3 collects all three answers before constructing a profile, then presents its summary, inferences and any evidence-linked contradictions one screen at a time. The participant can accept, correct or reject each inference. The participant chooses Speak or Type at each question. Stage 4 accepts the actual answer only after the prediction appears, then shows them side by side. Every recording can be stopped, replayed, deleted and transcribed through the local server. If transcription fails, the audio remains available and the answer can be typed.
+
+The page stays fixed to one viewport on ordinary desktop screens. Long results use in-stage review screens instead of a long page. On small displays, the scene itself may scroll so no controls or text become inaccessible. Stage 5 separates the AI response from your review; its optional voice/portrait setup remains available after text is generated. Stage 6 separates the fictional scene from the final reflection.
 
 The Stage 1 meaningful image may show any subject. A separate, optional mirrored portrait is captured in Stage 5 for D-ID. Enabling the Stage 1 camera keeps the mirrored preview visible through the middle stages; participants can turn it off at any time. Participants who upload an image can separately enable camera presence later. The camera stops at Stage 6, on End Experience, Delete Session and page exit. A portrait is sent to D-ID only with separate animation permission.
 
@@ -38,13 +40,15 @@ Each operation has an independent record in `sessionState.operations` with exact
 | OpenAI identity profile | 60 seconds |
 | OpenAI prediction | 60 seconds |
 | OpenAI proxy response | 60 seconds |
-| OpenAI fictional generation | 60 seconds |
+| OpenAI fictional generation | 150 seconds, including one validation retry |
 | ElevenLabs clone and speech | 180 seconds |
 | D-ID animation | 480 seconds |
 
 The server additionally limits OpenAI calls to 90 seconds, ElevenLabs clone creation to 60 seconds, ElevenLabs speech to 90 seconds, each D-ID upload/create request to 60 seconds, each D-ID poll to 30 seconds, D-ID job polling to 330 seconds by default, and the completed-video download to 60 seconds. D-ID cleanup requests run in parallel. Browser timeout values can be overridden before `script.js` loads with `globalThis.__ANOTHER_ME_TIMEOUTS__` for automated tests.
 
 Fallbacks preserve the recording when transcription fails, preserve the last valid profile when OpenAI analysis fails, retain generated text when ElevenLabs fails, and retain a still portrait plus cloned audio when D-ID fails. If both media services fail, Stage 5 remains usable with the still portrait and text or text alone. Mock outputs are visibly marked and are never reported as successful live API results.
+
+If the browser is still showing an older server process after an update, stop that process and restart this v4 server before retesting the live routes. A second process can instead use `$env:INTEGRATION_PORT='4184'; node Integration-Prototype-v4/server/index.cjs`, then open `http://127.0.0.1:4184/`. API keys being present does not prove that the provider account has the required permissions or credits.
 
 ## Development-only simulations
 

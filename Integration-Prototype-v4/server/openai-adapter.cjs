@@ -50,12 +50,23 @@ function validateFictionResult(result, answers) {
   const suppliedText = answers.map(item => item.answer).join(" ").toLowerCase();
   const uniqueInvented = Array.isArray(invented) ? new Set(invented.map(item => String(item).trim().toLowerCase())) : new Set();
   const borrowedAreSupplied = Array.isArray(borrowed) && borrowed.length >= 1 && borrowed.length <= 3
-    && borrowed.every(detail => detail.trim() && suppliedText.includes(detail.trim().toLowerCase()) && memory.toLowerCase().includes(detail.trim().toLowerCase()));
+    && borrowed.every(detail => detail.trim() && suppliedText.includes(detail.trim().toLowerCase()));
   const inventedAreVisible = Array.isArray(invented) && invented.length >= 2 && invented.length <= 3 && uniqueInvented.size === invented.length
     && invented.every(detail => detail.trim() && memory.toLowerCase().includes(detail.trim().toLowerCase()) && !suppliedText.includes(detail.trim().toLowerCase()));
-  if (!memory.startsWith("I remember") || !borrowedAreSupplied || !inventedAreVisible
-    || result.source_label !== "GENERATED WITHOUT YOUR INPUT" || result.warning !== fictionWarning || result.confidence_label !== "low") {
-    throw Object.assign(new Error("The fictional response failed visible-invention validation."), { statusCode: 502 });
+  const invalidParts = [
+    !memory.startsWith("I remember") && "opening",
+    !borrowedAreSupplied && "borrowed fragments",
+    !inventedAreVisible && "invented details",
+    result.source_label !== "GENERATED WITHOUT YOUR INPUT" && "source label",
+    result.warning !== fictionWarning && "warning",
+    result.confidence_label !== "low" && "confidence"
+  ].filter(Boolean);
+  if (invalidParts.length) {
+    console.warn(`[integration-api] Fiction validation rejected: ${invalidParts.join(", ")}`);
+    throw Object.assign(new Error("The fictional response failed visible-invention validation."), {
+      statusCode: 502,
+      publicMessage: "The AI did not clearly separate borrowed and invented details. Please try again or use the labelled simulated scene."
+    });
   }
   return result;
 }
@@ -65,17 +76,23 @@ async function generate(kind, answers, question, context = {}) {
     ? `You are a deliberately uncertain first-person proxy in an identity experiment. Use the supplied answers, temporary profile, participant corrections, and earlier prediction feedback as evidence. Answer in 2-3 concise natural sentences and no more than 70 words, beginning exactly: "This is what I think you would do. I would". Continue speaking as the participant using I/me/my, not as an outside narrator. Make a specific choice and explain its reasoning; reflect tensions in the evidence instead of copying phrases into a template. Do not claim certainty or psychological authority. Cite only provided answer IDs. Do not infer sensitive traits. Set invented_detail to an empty string.`
     : `Create an explicitly fictional first-person hypothetical memory for an identity experiment. Connect it to 1-3 short, exact fragments copied from the participant answers and list those fragments in details_borrowed_from_user. Begin fictional_memory exactly with "I remember". Introduce 2-3 concrete details that appear nowhere in the supplied answers, using categories such as a location, weather, object, action, sound, texture, smell, temperature or light. Put each invented detail's exact wording in details_invented_by_ai and include every listed detail visibly in fictional_memory. Build a coherent 4-6 sentence scene rather than filling a fixed template. Set source_label exactly to "GENERATED WITHOUT YOUR INPUT", warning exactly to "${fictionWarning}", and confidence_label to low. Never imply the event happened, diagnose the participant or infer sensitive traits. Cite only provided answer IDs.`;
   const schema = kind === "proxy" ? proxyResultSchema : fictionResultSchema;
-  const response = await client().responses.create({
-    model: process.env.OPENAI_MODEL || "gpt-5.4-mini", store: false,
-    instructions, input: JSON.stringify({ supplied_answers: answers, temporary_identity_context: context || {}, question }),
-    text: { format: { type: "json_schema", name: `${kind}_result`, strict: true, schema } },
-    max_output_tokens: kind === "proxy" ? 500 : 1200
-  });
-  if (response.status !== "completed" || !response.output_text) throw Object.assign(new Error("The model did not complete the response."), { statusCode: 502 });
-  let result;
-  try { result = JSON.parse(response.output_text); } catch { throw Object.assign(new Error("The model returned invalid JSON."), { statusCode: 502 }); }
-  if (!Array.isArray(result.evidence_ids) || !result.evidence_ids.every(id => ids.includes(id))) throw Object.assign(new Error("The model returned invalid evidence."), { statusCode: 502 });
-  if (kind === "proxy" && (!result.text?.startsWith("This is what I think you would do. I would") || result.invented_detail)) throw Object.assign(new Error("The proxy response failed first-person validation."), { statusCode: 502 });
-  return kind === "fiction" ? validateFictionResult(result, answers) : result;
+  const api = client();
+  for (let attempt = 1; attempt <= (kind === "fiction" ? 2 : 1); attempt += 1) {
+    const response = await api.responses.create({
+      model: process.env.OPENAI_MODEL || "gpt-5.4-mini", store: false,
+      instructions: attempt === 1 ? instructions : `${instructions} Your previous output failed validation. Copy borrowed fragments exactly from the supplied answers. Make each of 2-3 invented details an exact, visible substring of fictional_memory and absent from all supplied answers.`,
+      input: JSON.stringify({ supplied_answers: answers, temporary_identity_context: context || {}, question }),
+      text: { format: { type: "json_schema", name: `${kind}_result`, strict: true, schema } },
+      max_output_tokens: kind === "proxy" ? 500 : 1200
+    });
+    if (response.status !== "completed" || !response.output_text) throw Object.assign(new Error("The model did not complete the response."), { statusCode: 502 });
+    let result;
+    try { result = JSON.parse(response.output_text); } catch { throw Object.assign(new Error("The model returned invalid JSON."), { statusCode: 502 }); }
+    if (!Array.isArray(result.evidence_ids) || !result.evidence_ids.every(id => ids.includes(id))) throw Object.assign(new Error("The model returned invalid evidence."), { statusCode: 502 });
+    if (kind === "proxy" && (!result.text?.startsWith("This is what I think you would do. I would") || result.invented_detail)) throw Object.assign(new Error("The proxy response failed first-person validation."), { statusCode: 502 });
+    if (kind === "proxy") return result;
+    try { return validateFictionResult(result, answers); }
+    catch (error) { if (attempt === 2) throw error; }
+  }
 }
 module.exports = { audioNames, createIdentityProfile, createPrediction, generate, transcribe, validateFictionResult };

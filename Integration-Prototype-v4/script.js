@@ -35,7 +35,7 @@ const operationDefinitions = {
   identity: { label: "Identity profile", stages: [3], timeoutMs: 60_000, loading: "Updating your temporary identity profile…", success: "Temporary identity profile ready. Review each interpretation.", fallback: "Live identity analysis is unavailable. The last valid profile is preserved; you can use a clearly labelled mock profile or continue." },
   prediction: { label: "Prediction", stages: [4], timeoutMs: 60_000, loading: "Generating the AI’s prediction…", success: "Prediction ready. Read it before entering your answer.", fallback: "Live prediction is unavailable. You can use a clearly labelled mock prediction or skip this step." },
   proxy: { label: "On-behalf response", stages: [5], timeoutMs: 60_000, loading: "Generating a response on your behalf…", success: "On-behalf response ready. Review it before continuing.", fallback: "Live response generation is unavailable. You can use clearly labelled mock text or skip this step." },
-  fiction: { label: "Fictional generation", stages: [6], timeoutMs: 60_000, loading: "Generating clearly fictional content…", success: "Fictional content ready. Review its disclosure before continuing.", fallback: "Live fictional generation is unavailable. You can use clearly labelled mock fiction or finish without it." },
+  fiction: { label: "Fictional generation", stages: [6], timeoutMs: 150_000, loading: "Generating clearly fictional content…", success: "Fictional content ready. Review its disclosure before continuing.", fallback: "Live fictional generation is unavailable. You can use clearly labelled mock fiction or finish without it." },
   elevenlabs: { label: "Voice response", stages: [5], timeoutMs: 180_000, loading: "Creating the voice response…", success: "Temporary cloned voice ready.", fallback: "Voice cloning is unavailable. The generated text remains available, with optional browser speech if you allow it." },
   did: { label: "Digital-double animation", stages: [5], timeoutMs: 480_000, loading: "Animating your digital double… D-ID may remain queued for several minutes before rendering.", success: "Talking portrait ready.", fallback: "Animation is unavailable. The still portrait and completed audio remain available; if audio is unavailable, the experience uses portrait and text." }
 };
@@ -78,7 +78,7 @@ function newSession() {
     },
     feedback: {}, operations: createOperationStates(), started: false, currentStage: 1, questionIndex: 0, predictionShown: false,
     photoConfirmed: false, audioConfirmed: false, ended: false, finished: false,
-    ui: { inputMode: {}, questionRevealed: [false, false, false], predictionCompared: false, fictionAnswered: false,
+    ui: { inputMode: {}, questionRevealed: [false, false, false], profilePage: 0, predictionCompared: false, proxyReview: false, fictionReflection: false, fictionAnswered: false,
       correctingInferenceId: "", correctingProxy: false, mediaOptionsOpen: false }
   };
 }
@@ -141,7 +141,13 @@ function renderOperationStatus() {
   if (!operationStatusElement) return;
   const priority = { loading: 5, timeout: 4, error: 4, fallback: 3, success: 2, idle: 0 };
   const candidates = Object.entries(sessionState.operations)
-    .filter(([key, item]) => operationDefinitions[key].stages.includes(sessionState.currentStage) && !["idle", "success"].includes(item.state))
+    .filter(([key, item]) => {
+      if (!operationDefinitions[key].stages.includes(sessionState.currentStage) || ["idle", "success"].includes(item.state)) return false;
+      if (item.state !== "fallback") return true;
+      return !(key === "identity" && sessionState.inferred.profile || key === "prediction" && sessionState.predictionShown
+        || key === "proxy" && sessionState.generated.proxyResponses.length || key === "fiction" && sessionState.generated.fictionalContent.length
+        || key === "elevenlabs" && sessionState.generated.proxyResponses.length || key === "did" && sessionState.generated.proxyResponses.length);
+    })
     .sort((left, right) => priority[right[1].state] - priority[left[1].state] || right[1].updatedAt - left[1].updatedAt);
   if (!candidates.length || sessionState.ended || !sessionState.started || sessionState.finished) {
     operationStatusElement.hidden = true;
@@ -207,6 +213,8 @@ async function applyDevelopmentScenario(key, signal) {
 }
 function friendlyFailure(key, error) {
   const label = operationDefinitions[key].label;
+  if (key === "fiction" && error?.message?.includes("did not clearly separate borrowed and invented details"))
+    return { state: "error", code: "invalid_fiction", message: "The invented scene did not clearly distinguish your words from AI-made details. Try again or choose the labelled simulated scene." };
   if (error?.code === "timeout") return { state: "timeout", code: "timeout", message: key === "did" && error.message
     ? `${error.message} Your information and completed stages are still here.`
     : `${label} took too long and was stopped. Your information and completed stages are still here.` };
@@ -384,9 +392,10 @@ function render() {
   const continueButton = document.querySelector('.navigation [data-action="continue"]');
   const canContinue = !sessionState.started ? false : sessionState.finished ? false : stage === 1 ? Boolean(sessionState.supplied.image && sessionState.photoConfirmed)
     : stage === 2 ? Boolean(sessionState.supplied.transcript.trim() || sessionState.audioConfirmed)
-      : stage === 3 ? sessionState.questionIndex >= questions.length
+      : stage === 3 ? sessionState.questionIndex >= questions.length && Boolean(sessionState.inferred.profile)
+          && sessionState.ui.profilePage >= sessionState.inferred.profile.inferred_information.length + sessionState.inferred.profile.contradictions.length
         : stage === 4 ? Boolean(sessionState.ui.predictionCompared && sessionState.predicted.comparisons[0]?.rating)
-          : stage === 5 ? Boolean(sessionState.generated.proxyResponses[0])
+          : stage === 5 ? Boolean(sessionState.generated.proxyResponses[0]?.feedback)
             : sessionState.ui.fictionAnswered;
   continueButton.disabled = !canContinue || sessionState.ended;
   document.querySelector(".navigation").hidden = !sessionState.started || sessionState.ended || sessionState.finished;
@@ -437,33 +446,32 @@ function renderQuestions() {
   if (sessionState.questionIndex >= questions.length) return renderProfile();
   const index = sessionState.questionIndex;
   const answer = sessionState.supplied.answers[index];
-  const revealed = sessionState.ui.questionRevealed[index];
   const mode = sessionState.ui.inputMode[answer.id];
-  const inference = sessionState.inferred.moments[index] || sessionState.inferred.profile?.inferred_information.find(item => item.evidence_ids.includes(answer.id));
   return `<p class="question-count">QUESTION ${index + 1} / ${questions.length}</p>${spokenPrompt(`question-${index + 1}`, answer.question)}
-    ${revealed ? `<div class="question-reveal"><div class="echo">${source(answer.textOrigin === "transcribed" ? "transcribed" : "supplied", answer.audio && !answer.text.trim() ? "YOUR VOICE ANSWER" : "YOUR ANSWER")}${answer.audio && !answer.text.trim() ? `<audio controls preload="metadata" src="${answer.audio.url}"></audio>` : `<p>${escapeHtml(answer.text)}</p>`}</div>
-      <p class="machine-intro">The system replies</p>${inference ? renderInference(inference) : `<p class="tentative">${answer.audio && !answer.text.trim() ? "Your recording is saved as your answer. I cannot interpret its words until transcription works." : "I don't have enough to make a reliable interpretation of that answer."}</p>`}
-      ${sessionState.inferred.profile?.contradictions?.length ? `<details class="quiet-details"><summary>Something does not quite fit</summary>${sessionState.inferred.profile.contradictions.map(item => `<p>${escapeHtml(item.description)}</p>`).join("")}</details>` : ""}
-      ${buttons([["next-question", index === 2 ? "See the temporary profile" : "Hear the next question", "primary"], ["edit-question", "Edit my answer"]])}</div>`
-    : `<div class="answer-moment">${!mode && !answer.audio && !answer.text ? inputChoice(answer.id) : ""}
+    <div class="answer-moment">${!mode && !answer.audio && !answer.text ? inputChoice(answer.id) : ""}
       ${mode === "speak" || answer.audio ? `${renderRecordingControls(answer.id, answer.audio)}
         ${answer.audio && !sessionState.consent.transcription ? `<p class="small">Transcription sends this recording to OpenAI through the local server. You can still type instead.</p>${buttons([["allow-transcription", "Allow transcription", "primary", busy]])}` : ""}
         ${answer.audio && sessionState.consent.transcription && !answer.text ? buttons([["transcribe", "Try transcription", "primary", busy]]) : ""}` : ""}
       ${mode === "type" || answer.text ? `<div class="words-scene">${source(answer.textOrigin === "transcribed" ? "transcribed" : "supplied", "YOUR ANSWER")}<label for="questionText">Your answer</label><textarea id="questionText" maxlength="4000" placeholder="Take your time…">${escapeHtml(answer.text)}</textarea></div>` : ""}
       ${mode ? `<button type="button" class="text-link" data-action="switch-input" data-target="${answer.id}" data-mode="${mode === "type" ? "speak" : "type"}">${mode === "type" ? "Speak instead" : "Type instead"}</button>` : ""}
       ${answer.audio && !answer.text ? '<p class="small">Your recording is saved, not skipped. Transcribe or type the words before asking the system to interpret them.</p>' : ""}
-      ${mode === "type" || answer.text || answer.audio ? buttons([["next-question", answer.audio && !answer.text.trim() ? "Continue with saved recording" : "Hear what the system thinks", "primary", busy || (!answer.text.trim() && !answer.audio)]]) : ""}</div>`}`;
+      ${mode === "type" || answer.text || answer.audio ? buttons([["next-question", index === 2 ? "Build my temporary profile" : "Next question", "primary", busy || (!answer.text.trim() && !answer.audio)]]) : ""}</div>`;
 }
 function renderProfile() {
   const profile = sessionState.inferred.profile;
   const answeredCount = sessionState.supplied.answers.filter(answer => answer.text.trim() || answer.audio).length;
   const voiceOnly = sessionState.supplied.answers.filter(answer => answer.audio && !answer.text.trim()).length;
-  return `<section class="profile-moment"><p class="scene-line">${answeredCount ? `From ${answeredCount} ${answeredCount === 1 ? "answer" : "answers"}, a version of you is taking shape.` : "You chose not to answer these questions."}</p><p class="small">This is a temporary interpretation, not your complete identity.</p>
-    ${voiceOnly ? `<p class="warning">${voiceOnly} voice ${voiceOnly === 1 ? "answer was" : "answers were"} recorded, not skipped, but could not be interpreted without transcription. Review the questions and retry transcription.</p>` : ""}
+  const items = profile ? [
+    ...profile.inferred_information.map(item => renderInference(item)),
+    ...profile.contradictions.map(item => `<article class="contradiction-card">${source("inferred", "POSSIBLE CONTRADICTION")}<h3>Something does not quite fit</h3><p>${escapeHtml(item.description)}</p><p class="small">Based on: ${escapeHtml(item.evidence_ids.join(", "))}. ${escapeHtml(item.possible_explanation)}</p></article>`)
+  ] : [];
+  const page = Math.min(sessionState.ui.profilePage, items.length);
+  return `<section class="profile-moment">${page === 0 ? `<p class="scene-line">${answeredCount ? `From ${answeredCount} ${answeredCount === 1 ? "answer" : "answers"}, a version of you is taking shape.` : "You chose not to answer these questions."}</p><p class="small">This is a temporary interpretation, not your complete identity.</p>
+    ${voiceOnly ? `<p class="warning">${voiceOnly} voice ${voiceOnly === 1 ? "answer was" : "answers were"} recorded, not skipped, but could not be interpreted without transcription. Review the questions and retry transcription.</p>` : ""}` : ""}
     ${sessionState.inferred.mode === "mock" ? '<p class="fallback-label">SIMULATED AI INTERPRETATION</p>' : ""}
-    ${profile ? `<blockquote class="profile-summary">${escapeHtml(profile.profile_summary)}</blockquote><details class="quiet-details"><summary>See the inferences and evidence</summary>${profile.inferred_information.length ? profile.inferred_information.map(renderInference).join("") : '<p>No supported interpretation was produced.</p>'}
-      ${profile.contradictions.map(item => `<p><strong>Possible tension:</strong> ${escapeHtml(item.description)}</p>`).join("")}</details>` : '<p class="inline-note">No profile yet.</p>'}
-    ${buttons([["regenerate-profile", profile ? "Try the profile again" : "Generate profile", "", busy], ["mock-profile", "Use simulated profile"], ["review-questions", "Review my answers"]])}</section>`;
+    ${profile ? `<p class="question-count">PROFILE ${page + 1} / ${items.length + 1}</p>${page === 0 ? `<blockquote class="profile-summary">${escapeHtml(profile.profile_summary)}</blockquote><p class="small">${profile.inferred_information.length} tentative interpretations · ${profile.contradictions.length} possible contradictions</p>${!profile.contradictions.length ? '<p class="small">No contradiction was identified in these answers; the system has not invented one.</p>' : ""}` : items[page - 1]}
+      ${buttons([...(page ? [["previous-profile-item", "Previous finding"]] : []), ...(page < items.length ? [["next-profile-item", "Review next finding", "primary"]] : [])])}` : '<p class="inline-note">No profile yet. Finish all three answers, then try again.</p>'}
+    ${page === 0 ? buttons([["regenerate-profile", profile ? "Try the profile again" : "Generate profile", "", busy], ["mock-profile", "Use simulated profile"], ["review-questions", "Review my answers"]]) : ""}</section>`;
 }
 function renderInference(item) {
   const feedback = sessionState.inferred.participantFeedback.find(row => row.id === item.id);
@@ -491,36 +499,41 @@ function renderPrediction() {
         <p class="scene-line">How close was it?</p><div class="choice-row">${["Correct", "Partly correct", "Incorrect"].map(value => `<button type="button" data-action="rate-prediction" data-value="${value}" aria-pressed="${comparison?.rating === value}">${value}</button>`).join("")}</div>
         <details class="quiet-details"><summary>Tell us what the system missed</summary><label for="predictionCorrection">Your explanation</label><textarea id="predictionCorrection">${escapeHtml(comparison?.explanation || "")}</textarea></details>`}`}`;
 }
+function renderMediaSetup(image, voiceSample) {
+  return `<div class="optional-media"><p>Voice cloning sends one recorded answer to ElevenLabs. A temporary voice is deleted after speech generation. Facial animation separately sends a clear portrait and cloned audio to D-ID.</p>
+    ${buttons([["toggle-voice", sessionState.consent.voiceCloning ? "Revoke cloned voice" : "Allow cloned voice", "", !voiceSample]])}
+    ${!voiceSample ? '<p class="small">Record a voice answer in Stage 2, 3, or 4 to enable cloning.</p>' : ""}
+    ${image ? `${source("supplied", "YOUR PORTRAIT")}<img class="setup-portrait" src="${image.url}" alt="Your captured portrait">${buttons([["delete-portrait", "Delete portrait"]])}` : ""}
+    ${cameraStream ? buttons([["capture-portrait", image ? "Retake portrait" : "Take my portrait"]]) : buttons([["enable-presence-camera", "Enable camera for portrait"]])}
+    ${buttons([["toggle-face", sessionState.consent.faceAnimation ? "Revoke facial animation" : "Allow facial animation", "", !image], ["toggle-standard-audio", sessionState.consent.standardAudio ? "Revoke standard voice" : "Allow standard voice fallback"]])}
+    <p class="small">Voice and animation are separate permissions. A chosen image is not automatically treated as your portrait.</p></div>`;
+}
 function renderProxy() {
   const item = sessionState.generated.proxyResponses[0];
   const image = sessionState.supplied.portrait;
   const voiceSample = bestVoiceRecording();
   const media = sessionState.generated.proxyMedia;
+  if (item && sessionState.ui.proxyReview) return `${source("proxy", sessionState.generated.proxyMode === "mock" ? "SIMULATED" : "")}<div class="double-review"><p class="scene-line">Would you have said this?</p><blockquote class="review-quote">${escapeHtml(item.text)}</blockquote><p class="small">This is an AI interpretation, not your real answer.</p>
+    ${item.feedback ? `<p class="review-note">You ${escapeHtml(item.feedback)} this response${item.correction ? ` and said: “${escapeHtml(item.correction)}”` : ""}.</p>` : ""}
+    ${sessionState.ui.correctingProxy ? `<label for="proxyCorrection">What would you say instead?</label><textarea id="proxyCorrection" rows="3"></textarea>${buttons([["save-proxy-correction", "Keep my correction", "primary"], ["cancel-proxy-correction", "Cancel"]])}` : buttons([["review-proxy", "Accept"], ["correct-proxy", "Correct"], ["reject-proxy", "Reject"], ["delete-proxy", "Delete this response", "danger"]])}
+    ${buttons([["review-proxy-back", "See the double again"]])}</div>`;
+  if (item && sessionState.ui.mediaOptionsOpen) return `${spokenPrompt("proxy-question", proxyQuestion)}<p class="scene-line">Give the double a voice or a portrait</p>${renderMediaSetup(image, voiceSample)}${buttons([["generate-proxy-media", media.audio ? "Try animation again" : "Create cloned voice and animation", "primary", busy || !sessionState.consent.voiceCloning || !voiceSample], ["toggle-media-options", "Back to response"]])}`;
   return `${spokenPrompt("proxy-question", proxyQuestion)}
     ${!sessionState.consent.proxyResponse ? `<p class="consent-line">The system can answer this question as if it were you. You do not answer first. This requires your permission.</p>${buttons([["allow-proxy", "Allow a text response", "primary"]])}` : ""}
     ${sessionState.consent.proxyResponse && !item ? `<div class="proxy-setup"><p class="scene-line">How should the double appear?</p>
-      <div class="optional-media"><p>Text always works. Voice and animation are separate choices.</p>
-        <details class="quiet-details" ${sessionState.ui.mediaOptionsOpen ? "open" : ""}><summary data-action="toggle-media-options">Optional voice and portrait</summary>
-          <p>Voice cloning sends the longest recording you made to ElevenLabs. A temporary voice is deleted after speech generation. A short sample may sound approximate.</p>
-          ${buttons([["toggle-voice", sessionState.consent.voiceCloning ? "Voice cloning allowed · revoke" : "Allow cloned voice", "", !voiceSample]])}
-          <p>Facial animation sends a separate portrait and cloned speech to D-ID. Use a clear, front-facing image. Processing may take several minutes.</p>
-          ${image ? `${source("supplied", "YOUR PORTRAIT")}<img class="setup-portrait" src="${image.url}" alt="Your captured portrait">${buttons([["delete-portrait", "Delete portrait"]])}` : ""}
-          ${cameraStream ? buttons([["capture-portrait", image ? "Retake portrait" : "Take my portrait"]]) : buttons([["enable-presence-camera", "Enable camera for portrait"]])}
-          ${buttons([["toggle-face", sessionState.consent.faceAnimation ? "Animation allowed · revoke" : "Allow facial animation", "", !image], ["toggle-standard-audio", sessionState.consent.standardAudio ? "Standard voice allowed · revoke" : "Allow standard voice fallback"]])}
-          ${!voiceSample ? '<p class="small">To clone a voice, record an answer in Stage 2, 3, or 4.</p>' : ""}</details></div>
+      <details class="quiet-details" ${sessionState.ui.mediaOptionsOpen ? "open" : ""}><summary data-action="toggle-media-options">Optional voice and portrait setup</summary>${renderMediaSetup(image, voiceSample)}</details>
       ${buttons([["generate-proxy", "Let the double answer", "primary", busy], ["mock-proxy", "Use simulated answer"]])}</div>` : ""}
     ${item ? `<div class="double-scene"><div class="participant-side"><p class="machine-intro">YOU SHARED</p>${sessionState.supplied.image ? `<img src="${sessionState.supplied.image.url}" alt="Your chosen image">` : `<p class="no-image">No image supplied</p>`}</div>
       <article class="double-side">${source("proxy", sessionState.generated.proxyMode === "mock" ? "SIMULATED" : "")}
         ${media.video ? `<video controls playsinline preload="metadata" src="${media.video.url}"></video>` : image ? `<img src="${image.url}" alt="Still portrait of the participant; no animation was generated">` : ""}
         ${media.audio && !media.video ? `<audio controls preload="metadata" src="${media.audio.url}"></audio>` : ""}
         <blockquote>${escapeHtml(item.text)}</blockquote><p class="small">This is an AI interpretation, not your real answer.</p>
-        <p class="media-truth">${media.presentation === "talking-avatar" ? "Talking portrait with temporary cloned audio" : media.presentation === "cloned-audio" ? "Still portrait with temporary cloned audio" : image ? "Still portrait and text; no animation was generated" : "Text-only response; no portrait or audio was generated"}</p>
+        <p class="media-truth">${media.presentation === "talking-avatar" ? "Talking portrait with temporary cloned audio" : media.presentation === "cloned-audio" ? image ? "Still portrait with temporary cloned audio" : "Cloned audio with text; no portrait was supplied" : image ? "Still portrait and text; no animation was generated" : "Text-only response; no portrait or audio was generated"}</p>
         ${media.error ? `<p class="warning">${escapeHtml(media.error)}</p>` : ""}
         <details class="quiet-details"><summary>Why did the AI say this?</summary><p>Based on: ${escapeHtml(item.evidence_ids.join(", ") || "limited input")}. Confidence: ${escapeHtml(item.confidence_label)}.</p></details>
-        ${sessionState.consent.voiceCloning && voiceSample && !media.video ? buttons([["generate-proxy-media", media.audio ? "Try animation again" : "Create cloned voice and animation", "", busy]]) : ""}
-        ${sessionState.consent.standardAudio && "speechSynthesis" in window && !media.audio ? buttons([["play-proxy", "Play standard browser voice"]]) : ""}</article></div>
-      <div class="double-review"><p class="scene-line">Would you have said this?</p>${item.feedback ? `<p class="review-note">You ${escapeHtml(item.feedback)} this response${item.correction ? ` and said: “${escapeHtml(item.correction)}”` : ""}.</p>` : ""}
-        ${sessionState.ui.correctingProxy ? `<label for="proxyCorrection">What would you say instead?</label><textarea id="proxyCorrection" rows="3"></textarea>${buttons([["save-proxy-correction", "Keep my correction", "primary"], ["cancel-proxy-correction", "Cancel"]])}` : buttons([["review-proxy", "Accept"], ["correct-proxy", "Correct"], ["reject-proxy", "Reject"], ["delete-proxy", "Delete this response", "danger"]])}</div>` : ""}`;
+        ${!media.video ? buttons([["toggle-media-options", media.audio ? "Set up talking portrait" : "Set up voice and talking portrait"]]) : ""}
+        ${sessionState.consent.standardAudio && "speechSynthesis" in window && !media.audio ? buttons([["play-proxy", "Play standard browser voice"]]) : ""}
+        ${buttons([["review-proxy-open", "Review this response", "primary"]])}</article></div>` : ""}`;
 }
 function renderFiction() {
   const item = sessionState.generated.fictionalContent[0];
@@ -529,12 +542,11 @@ function renderFiction() {
   const earlierInference = sessionState.inferred.profile?.inferred_information?.[0]?.statement;
   return `${!sessionState.consent.fictionalGeneration ? `<div class="fiction-consent"><p class="scene-line">The system is about to invent something you never told it.</p><p>It may borrow fragments of your words, but the scene will be fictional. It is not a recovered memory.</p>${buttons([["allow-fiction", "Allow a fictional scene", "primary"]])}</div>` : ""}
     ${sessionState.consent.fictionalGeneration && !item ? `<p class="scene-line">What would it remember without you?</p>${buttons([["generate-fiction", "Reveal the invented scene", "primary", busy], ["mock-fiction", "Use simulated scene"]])}` : ""}
-    ${item && !sessionState.ui.fictionAnswered ? `<article class="fiction-scene">${source("invented", sessionState.generated.fictionMode === "mock" ? "SIMULATED" : "")}<p class="fiction-warning">FICTIONAL AI-GENERATED CONTENT · NOT YOUR MEMORY</p><blockquote>${escapeHtml(item.fictional_memory)}</blockquote>
+    ${item && !sessionState.ui.fictionReflection ? `<article class="fiction-scene">${source("invented", sessionState.generated.fictionMode === "mock" ? "SIMULATED" : "")}<p class="fiction-warning">FICTIONAL AI-GENERATED CONTENT · NOT YOUR MEMORY</p><blockquote>${escapeHtml(item.fictional_memory)}</blockquote>
       <p class="fiction-warning">${escapeHtml(item.warning)} This did not come from your memory or previous answers.</p>
-      <div class="fragment-ledger"><div>${source("supplied", "BORROWED FROM YOU")}<p>${borrowed.length ? borrowed.map(escapeHtml).join(" · ") : "No direct fragment was available."}</p></div><div>${source("inferred", "EARLIER AI INTERPRETATION")}<p>${earlierInference ? escapeHtml(earlierInference) : "No supported interpretation was available."} This is not verified knowledge.</p></div><div>${source("invented", "INVENTED BY AI")}<p>${invented.map(escapeHtml).join(" · ")}</p></div></div>
-      <details class="quiet-details"><summary>Why these fragments?</summary><p>Based on: ${escapeHtml(item.evidence_ids?.join(", ") || "limited input")}. These invented details are unverified and do not prove the scene happened.</p></details>${buttons([["delete-fiction", "Delete this scene"]])}</article>` : ""}
-    ${item && !sessionState.ui.fictionAnswered ? `<div class="final-question">${spokenPrompt("final-question", "Does this still feel like you?")}<div class="choice-row">${["Yes", "Partly", "No", "Unsure"].map(value => `<button data-action="feedback-choice" data-field="feelsLikeYou" data-value="${value}" aria-pressed="${sessionState.feedback.feelsLikeYou === value}">${value}</button>`).join("")}</div></div>` : ""}
-    ${sessionState.ui.fictionAnswered ? `<section class="last-word">${spokenPrompt("final-question", "Does this still feel like you?")}<p class="last-answer">${escapeHtml(sessionState.feedback.feelsLikeYou)}</p><label for="finalExplanation">If you want, say why.</label><textarea id="finalExplanation" rows="3" placeholder="Optional">${escapeHtml(sessionState.feedback.finalExplanation || "")}</textarea>
+      <details class="quiet-details"><summary>What was borrowed, and what was invented?</summary><div class="fragment-ledger"><div>${source("supplied", "BORROWED FROM YOU")}<p>${borrowed.length ? borrowed.map(escapeHtml).join(" · ") : "No direct fragment was available."}</p></div><div>${source("inferred", "EARLIER AI INTERPRETATION")}<p>${earlierInference ? escapeHtml(earlierInference) : "No supported interpretation was available."} This is not verified knowledge.</p></div><div>${source("invented", "INVENTED BY AI")}<p>${invented.map(escapeHtml).join(" · ")}</p></div></div><p>Based on: ${escapeHtml(item.evidence_ids?.join(", ") || "limited input")}. These invented details are unverified.</p></details>${buttons([["reflect-fiction", "Continue to your response", "primary"], ["delete-fiction", "Delete this scene"]])}</article>` : ""}
+    ${item && sessionState.ui.fictionReflection && !sessionState.ui.fictionAnswered ? `<div class="final-question">${source("invented", sessionState.generated.fictionMode === "mock" ? "SIMULATED FICTION" : "FICTIONAL CONTENT")}${spokenPrompt("final-question", "Does this still feel like you?")}<div class="choice-row">${["Yes", "Partly", "No", "Unsure"].map(value => `<button data-action="feedback-choice" data-field="feelsLikeYou" data-value="${value}" aria-pressed="${sessionState.feedback.feelsLikeYou === value}">${value}</button>`).join("")}</div>${buttons([["back-to-fiction", "Read the fictional scene again"]])}</div>` : ""}
+    ${sessionState.ui.fictionAnswered ? `<section class="last-word">${source("invented", "FICTIONAL CONTENT")}<p class="fiction-warning">The previous scene was fictional and not your memory.</p>${spokenPrompt("final-question", "Does this still feel like you?")}<p class="last-answer">${escapeHtml(sessionState.feedback.feelsLikeYou)}</p><label for="finalExplanation">If you want, say why.</label><textarea id="finalExplanation" rows="3" placeholder="Optional">${escapeHtml(sessionState.feedback.finalExplanation || "")}</textarea>
       <details class="quiet-details"><summary>When did it begin to feel unlike you?</summary><label for="boundary">Choose a moment, or leave this unanswered</label><select id="boundary"><option value="">Choose a moment</option>${[...stages.map((row,index)=>`<option value="${index + 1}" ${sessionState.feedback.boundary === String(index + 1) ? "selected" : ""}>Stage ${index + 1}: ${row[0]}</option>`),`<option value="never" ${sessionState.feedback.boundary === "never" ? "selected" : ""}>It never felt like me</option>`,`<option value="unsure" ${sessionState.feedback.boundary === "unsure" ? "selected" : ""}>I am unsure</option>`].join("")}</select></details></section>` : ""}`;
 }
 
@@ -644,7 +656,10 @@ function invalidateAnalysis() {
   sessionState.predicted = { predictions: [], participantAnswers: [], comparisons: [], mode: "" };
   sessionState.predictionShown = false;
   sessionState.ui.questionRevealed = [false, false, false];
+  sessionState.ui.profilePage = 0;
   sessionState.ui.predictionCompared = false;
+  sessionState.ui.proxyReview = false;
+  sessionState.ui.fictionReflection = false;
   sessionState.ui.fictionAnswered = false;
   sessionState.generated = {
     proxyResponses: [], fictionalContent: [], proxyMode: "", fictionMode: "",
@@ -725,6 +740,7 @@ async function generateProfile(inlineQuestion = null) {
     if (!profile || !Array.isArray(profile.inferred_information) || !Array.isArray(profile.supplied_information)) throw new OperationFailure("empty_response", "The profile response was invalid.");
     sessionState.inferred.profile = profile;
     sessionState.inferred.mode = useMock ? "mock" : "real";
+    sessionState.ui.profilePage = 0;
     if (inlineQuestion !== null) {
       const id = sessionState.supplied.answers[inlineQuestion].id;
       const found = profile.inferred_information.find(item => item.evidence_ids.includes(id));
@@ -759,6 +775,8 @@ async function generateProxy() {
     clearProxyMedia();
     sessionState.generated.proxyResponses = [{ ...result, feedback: "", correction: "" }];
     sessionState.generated.proxyMode = useMock ? "mock" : "real";
+    sessionState.ui.mediaOptionsOpen = false;
+    sessionState.ui.proxyReview = false;
     return true;
   });
   if (completed && sessionState.consent.voiceCloning) await generateProxyMedia();
@@ -1068,7 +1086,8 @@ function move(direction) {
   if (busy) cancelActiveOperations("The unfinished request was stopped when you moved on. Your information is still here.");
   if (sessionState.currentStage === 1 && !sessionState.consent.cameraPresence) stopCamera();
   if (direction === "back") {
-    if (sessionState.currentStage === 3 && sessionState.questionIndex > 0) sessionState.questionIndex -= 1;
+    if (sessionState.currentStage === 3 && sessionState.questionIndex >= questions.length) sessionState.questionIndex = questions.length - 1;
+    else if (sessionState.currentStage === 3 && sessionState.questionIndex > 0) sessionState.questionIndex -= 1;
     else if (sessionState.currentStage > 1) sessionState.currentStage -= 1;
   } else if (direction === "skip" && sessionState.currentStage === 3 && sessionState.questionIndex < questions.length) {
     advanceQuestion(true); return;
@@ -1095,15 +1114,13 @@ async function advanceQuestion(skip = false) {
   if (busy) cancelActiveOperations("The unfinished request was stopped. Your recording and typed words are still here.");
   const answer = sessionState.supplied.answers[sessionState.questionIndex];
   if (!skip && answer && !answer.text.trim() && !answer.audio) return status("Answer by voice or text, or choose Skip.", "error");
-  if (!skip && !sessionState.ui.questionRevealed[sessionState.questionIndex]) {
-    if (answer.text.trim()) await generateProfile(sessionState.questionIndex);
-    sessionState.ui.questionRevealed[sessionState.questionIndex] = true;
-    render(); stageElement.focus();
-    document.querySelector(".question-reveal")?.scrollIntoView?.({ block: "start" });
-    return;
-  }
   sessionState.questionIndex += 1;
-  render(); stageElement.focus(); window.scrollTo?.(0, 0); status("");
+  render(); stageElement.focus(); status("");
+  if (sessionState.questionIndex === questions.length && !sessionState.inferred.profile) {
+    const available = sessionState.supplied.answers.filter(row => row.text.trim()).length;
+    if (available) await generateProfile();
+    else if (sessionState.supplied.answers.some(row => row.audio)) status("Your voice answers are saved. Transcribe them before building a profile, or use a clearly labelled simulated profile.", "error");
+  }
 }
 function clearMedia() {
   cancelActiveOperations();
@@ -1225,6 +1242,8 @@ document.addEventListener("click", async event => {
   else if (action === "edit-question") { sessionState.ui.questionRevealed[sessionState.questionIndex] = false; render(); }
   else if (["next-question","skip-question"].includes(action)) advanceQuestion(action === "skip-question");
   else if (action === "review-questions") { sessionState.questionIndex = 0; render(); }
+  else if (action === "previous-profile-item") { sessionState.ui.profilePage = Math.max(0, sessionState.ui.profilePage - 1); render(); }
+  else if (action === "next-profile-item") { sessionState.ui.profilePage += 1; render(); }
   else if (action === "regenerate-profile") generateProfile();
   else if (action === "mock-profile") { sessionState.inferred.profile = mockProfile(readableAnswers()); sessionState.inferred.mode = "mock"; sessionState.questionIndex = questions.length; setOperationState("identity", "fallback", { message: operationDefinitions.identity.fallback, detail: "MOCK AI OUTPUT is shown instead of a live API result." }); render(); status("Clearly marked mock profile ready.", "success"); }
   else if (action === "predict") generatePrediction();
@@ -1265,11 +1284,14 @@ document.addEventListener("click", async event => {
   else if (action === "generate-proxy") generateProxy();
   else if (action === "mock-proxy") {
     clearProxyMedia(); sessionState.generated.proxyResponses = [mockProxy(readableAnswers())]; sessionState.generated.proxyMode = "mock";
+    sessionState.ui.mediaOptionsOpen = false; sessionState.ui.proxyReview = false;
     setOperationState("proxy", "fallback", { message: operationDefinitions.proxy.fallback, detail: "MOCK on-behalf text is shown instead of a live API result." });
     render(); status("Mock proxy response ready.", "success");
     if (sessionState.consent.voiceCloning) await generateProxyMedia();
   }
   else if (action === "generate-proxy-media") generateProxyMedia();
+  else if (action === "review-proxy-open") { sessionState.ui.proxyReview = true; render(); }
+  else if (action === "review-proxy-back") { sessionState.ui.proxyReview = false; render(); }
   else if (action === "play-proxy" && sessionState.consent.standardAudio && "speechSynthesis" in window) { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(sessionState.generated.proxyResponses[0].text)); }
   else if (action === "review-proxy" || action === "reject-proxy") { sessionState.generated.proxyResponses[0].feedback = action === "review-proxy" ? "accepted" : "rejected"; render(); }
   else if (action === "correct-proxy") { sessionState.ui.correctingProxy = true; render(); }
@@ -1279,7 +1301,9 @@ document.addEventListener("click", async event => {
   else if (action === "allow-fiction") { sessionState.consent.fictionalGeneration = true; render(); }
   else if (action === "generate-fiction") generateFiction();
   else if (action === "mock-fiction") { sessionState.generated.fictionalContent = [mockFiction(readableAnswers())]; sessionState.generated.fictionMode = "mock"; setOperationState("fiction", "fallback", { message: operationDefinitions.fiction.fallback, detail: "MOCK fictional content is shown instead of a live API result." }); render(); status("Mock fictional memory ready.", "success"); }
-  else if (action === "delete-fiction") { sessionState.generated.fictionalContent = []; sessionState.ui.fictionAnswered = false; render(); }
+  else if (action === "reflect-fiction") { sessionState.ui.fictionReflection = true; render(); }
+  else if (action === "back-to-fiction") { sessionState.ui.fictionReflection = false; render(); }
+  else if (action === "delete-fiction") { sessionState.generated.fictionalContent = []; sessionState.ui.fictionReflection = false; sessionState.ui.fictionAnswered = false; render(); }
   else if (action === "feedback-choice") { sessionState.feedback[button.dataset.field] = button.dataset.value; if (button.dataset.field === "feelsLikeYou") sessionState.ui.fictionAnswered = true; render(); }
 });
 document.addEventListener("input", event => {

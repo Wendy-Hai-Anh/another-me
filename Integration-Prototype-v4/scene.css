@@ -246,3 +246,113 @@ dialog::backdrop { background: #121019c9; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+
+/* Keep the journey anchored to one viewport; only very small screens scroll inside the scene. */
+html, body { height: 100%; overflow: hidden; }
+.shell { height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.masthead { flex: 0 0 auto; padding-top: 12px; }
+.progress { flex: 0 0 auto; margin-top: 12px; }
+.utility { flex: 0 0 auto; }
+main {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: 1240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-top: clamp(16px, 3vh, 34px);
+  padding-bottom: 20px;
+  scrollbar-gutter: stable;
+}
+.shell[data-stage="3"] main, .shell[data-stage="4"] main, .shell[data-stage="5"] main { padding-top: 16px; }
+.navigation { flex: 0 0 auto; position: relative; bottom: auto; }
+.stage-title, .shell[data-stage="3"] .stage-title, .shell[data-stage="4"] .stage-title, .shell[data-stage="5"] .stage-title {
+  font-size: clamp(1.8rem, 3.1vw, 3.1rem);
+  margin-bottom: clamp(14px, 2.5vh, 25px);
+}
+.opening-screen, .ending-screen { padding-top: 2vh; }
+.opening-title { font-size: clamp(2.5rem, 5.3vw, 5.5rem); margin-bottom: 20px; }
+.prompt-surface { margin: 0 0 clamp(15px, 3vh, 28px); }
+.spoken-prompt, .shell[data-stage="3"] .spoken-prompt, .shell[data-stage="4"] .spoken-prompt, .shell[data-stage="5"] .spoken-prompt {
+  font-size: clamp(1.5rem, 3vw, 2.8rem);
+  line-height: 1.17;
+}
+.shell[data-stage="5"] .spoken-prompt { font-size: clamp(1.3rem, 2vw, 1.9rem); }
+.shell[data-stage="4"] .spoken-prompt { font-size: clamp(1.35rem, 2.3vw, 2.1rem); }
+.shell[data-stage="5"] .prompt-surface { margin-bottom: 10px; }
+.shell[data-stage="4"] .prompt-surface { margin-bottom: 10px; }
+.shell[data-stage="6"] .last-word .prompt-surface { margin-bottom: 8px; }
+.shell[data-stage="6"] .last-word .quiet-details { margin: 8px 0; }
+.image-scene .scene-line { margin-bottom: 12px; }
+.image-focus, .camera-focus { margin: 10px 0; }
+.image-focus img, .camera-focus video { max-height: min(37vh, 340px); }
+.image-choice, .input-choice { margin: 18px 0 10px; }
+.words-scene { margin: 12px 0; }
+textarea { min-height: 100px; max-height: 24vh; }
+.recording-surface { padding: 10px 0; margin: 12px 0; }
+.recording-surface audio { margin: 5px 0; }
+.controls { margin: 10px 0; }
+.profile-summary { margin: 12px 0; font-size: clamp(1.25rem, 2.2vw, 2rem); }
+.profile-moment .scene-line { margin: 0 0 6px; }
+.profile-moment > .small { margin: 4px 0 12px; }
+.profile-moment .tentative { font-size: clamp(1.25rem, 2vw, 1.85rem); line-height: 1.28; }
+.profile-moment .ai-utterance .quiet-details { margin: 8px 0; }
+.profile-moment .review-controls { margin: 10px 0; }
+.contradiction-card { max-width: 850px; padding-left: 18px; border-left: 2px solid var(--accent); }
+.contradiction-card h3 { margin: 0 0 5px; }
+.prediction-solo { margin: 14px 0; }
+.prediction-line { font-size: clamp(1.25rem, 2.3vw, 2rem); }
+.comparison { margin: 12px 0 18px; gap: 18px; }
+.comparison article { min-height: 0; padding: 15px; }
+.comparison article p { font-size: clamp(1.05rem, 1.7vw, 1.5rem); }
+.double-scene { min-height: 0; max-height: 48vh; margin: 12px 0; }
+.participant-side, .double-side { padding: 14px; }
+.participant-side img, .double-side video, .double-side img { max-height: min(19vh, 180px); }
+.double-side blockquote { margin: 9px 0; font-size: clamp(1rem, 1.5vw, 1.4rem); line-height: 1.3; }
+.double-side .quiet-details { margin: 6px 0; }
+.double-review { margin: 12px 0; }
+.double-review .scene-line { margin: 0 0 6px; }
+.review-quote { margin: 12px 0; font: 400 clamp(1.25rem, 2vw, 1.9rem)/1.38 "Palatino Linotype", Georgia, serif; }
+.fiction-scene { margin: 8px auto 16px; }
+.fiction-scene blockquote { margin: 12px 0; font-size: clamp(1.2rem, 2vw, 1.9rem); line-height: 1.35; }
+.fragment-ledger { margin: 10px 0; gap: 12px; }
+.final-question { margin: 0; padding: 0; border: 0; }
+.last-answer { margin: 0 0 8px; font-size: clamp(2rem, 4vw, 3.5rem); }
+.last-word textarea { min-height: 75px; }
+.operation-status:not([hidden]) + #status { display: none; }
+.operation-status:not([hidden]), #status:not(:empty) {
+  position: absolute;
+  z-index: 18;
+  right: clamp(16px, 5vw, 76px);
+  bottom: 62px;
+  width: min(540px, calc(100vw - 32px));
+  max-height: min(42vh, 300px);
+  overflow-y: auto;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  background: var(--scene) !important;
+  box-shadow: 0 8px 28px #0003;
+}
+.operation-status p { margin: 4px 0; }
+.operation-status .controls { margin: 5px 0 0; }
+#status:not(:empty) { top: 75px; bottom: auto; width: min(400px, calc(100vw - 32px)); }
+@media (max-width: 800px) {
+  .shell { height: 100dvh; min-height: 0; }
+  main { max-width: none; min-height: 0; padding: 18px 20px 22px; }
+  .double-scene { grid-template-columns: 1fr 1.3fr; }
+  .participant-side { border-right: 0; border-bottom: 1px solid var(--line); }
+  .fragment-ledger { grid-template-columns: repeat(3, 1fr); }
+  .presence-dock { position: fixed; right: 10px; bottom: 66px; width: 110px; margin: 0; display: block; }
+  .presence-dock video { width: 100%; }
+}
+@media (max-width: 560px) {
+  .utility { padding: 4px 12px; }
+  .masthead { padding: 10px 14px 0; }
+  .progress { margin: 6px 14px 0; }
+  main { padding: 14px 15px 18px; }
+  .stage-title { font-size: 1.75rem; }
+  .double-scene { grid-template-columns: 1fr; max-height: none; }
+  .participant-side { display: none; }
+  .fragment-ledger { grid-template-columns: 1fr; }
+  .navigation { padding: 8px 12px; }
+}

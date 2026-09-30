@@ -128,9 +128,8 @@ test("complete mock journey keeps labels, ordering and final feedback", async ()
   for (let i = 0; i < 3; i++) {
     h.run(`sessionState.supplied.answers[${i}].text = "Fictional answer ${i + 1}"`);
     await h.run("advanceQuestion()");
-    assert.equal(h.run(`sessionState.ui.questionRevealed[${i}]`), true);
-    assert.equal(h.run("sessionState.questionIndex"), i);
-    await h.run("advanceQuestion()");
+    assert.equal(h.run("sessionState.questionIndex"), i + 1);
+    if (i < 2) assert.equal(h.run("sessionState.inferred.profile"), null);
   }
   assert.equal(h.run("sessionState.questionIndex"), 3);
   assert.equal(h.run("sessionState.inferred.profile.supplied_information.length"), 4);
@@ -164,7 +163,7 @@ test("complete mock journey keeps labels, ordering and final feedback", async ()
   assert.match(fictionMarkup, /FICTIONAL AI-GENERATED CONTENT/);
   assert.match(fictionMarkup, /INVENTED BY AI/);
   assert.match(fictionMarkup, /This is fictional and was not supplied by you/);
-  h.run('sessionState.feedback.feelsLikeYou = "Unsure"; sessionState.ui.fictionAnswered = true; move("continue")');
+  h.run('sessionState.ui.fictionReflection = true; sessionState.feedback.feelsLikeYou = "Unsure"; sessionState.ui.fictionAnswered = true; move("continue")');
   assert.equal(h.run("sessionState.finished"), true);
 });
 test("camera permission denial leaves a safe upload or skip path", async () => {
@@ -200,11 +199,7 @@ test("voice recording counts even without transcription", async () => {
   assert.equal(h.run("readableAnswers().some(item => item.id === 'question_1')"), false);
   assert.ok(h.stopped.includes("microphone"));
   assert.match(h.run("renderProfile()"), /recorded, not skipped/);
-  assert.match(h.run("renderQuestions()"), /Continue with saved recording/);
-  await h.run("advanceQuestion()");
-  assert.equal(h.run("sessionState.questionIndex"), 0);
-  assert.equal(h.run("sessionState.ui.questionRevealed[0]"), true);
-  assert.match(h.run("renderQuestions()"), /recording is saved as your answer/);
+  assert.match(h.run("renderQuestions()"), /recording is saved, not skipped/);
   await h.run("advanceQuestion()");
   assert.equal(h.run("sessionState.questionIndex"), 1);
   assert.equal(h.run("Boolean(sessionState.supplied.answers[0].audio?.blob)"), true);
@@ -222,9 +217,20 @@ test("mock mode can transcribe a consented Stage 3 voice answer and use it in th
   assert.equal(h.requests[0].url, "/api/transcribe");
   assert.ok(h.stopped.includes("microphone"));
   await h.run("advanceQuestion()");
-  assert.equal(h.run("sessionState.questionIndex"), 0);
-  await h.run("advanceQuestion()");
   assert.equal(h.run("sessionState.questionIndex"), 1);
+});
+test("Stage 3 waits for all answers and shows contradictions as review pages", async () => {
+  const h = harness();
+  h.run('sessionState.currentStage = 3');
+  for (let i = 0; i < 3; i++) {
+    h.run(`sessionState.supplied.answers[${i}].text = "Fictional answer ${i + 1}"`);
+    await h.run("advanceQuestion()");
+  }
+  h.run('sessionState.inferred.profile.contradictions = [{evidence_ids:["question_1","question_2"],description:"The answers pull in different directions.",possible_explanation:"The context may change the choice."}]');
+  assert.match(h.run("renderProfile()"), /1 possible contradictions/);
+  h.run('sessionState.ui.profilePage = sessionState.inferred.profile.inferred_information.length + 1');
+  assert.match(h.run("renderProfile()"), /Something does not quite fit/);
+  assert.match(h.run("renderProfile()"), /question_1, question_2/);
 });
 test("Stage 2 confirmed recording transcribes with explicit consent in mock mode", async () => {
   const h = harness({ transcript: "The image reminds me of home." });
@@ -283,6 +289,17 @@ test("Stage 5 question does not assume the supplied image has a memory", () => {
   const h = harness(); h.run("sessionState.currentStage = 5");
   assert.match(h.run("renderProxy()"), /important decision on your behalf/);
   assert.doesNotMatch(h.run("renderProxy()"), /memory connected to your image/);
+});
+test("Stage 5 puts the response and participant review on separate screens", () => {
+  const h = harness();
+  h.run('sessionState.currentStage = 5; sessionState.generated.proxyResponses = [mockProxy([])]; render()');
+  assert.match(h.run("renderProxy()"), /Review this response/);
+  assert.doesNotMatch(h.run("renderProxy()"), /Would you have said this/);
+  assert.equal(h.elements.get('.navigation [data-action="continue"]').disabled, true);
+  h.run('sessionState.ui.proxyReview = true; render()');
+  assert.match(h.run("renderProxy()"), /Would you have said this/);
+  h.run('sessionState.generated.proxyResponses[0].feedback = "accepted"; render()');
+  assert.equal(h.elements.get('.navigation [data-action="continue"]').disabled, false);
 });
 test("presence camera remains live across middle stages and portrait is separate", async () => {
   const h = harness();
