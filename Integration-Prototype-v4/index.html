@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Another Me | A Presence in the Room</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/resilience.css">
+  <link rel="stylesheet" href="/experience.css">
+  <link rel="stylesheet" href="/scene.css">
+  <script src="/script.js" defer></script>
+</head>
+<body>
+  <div class="shell" id="experienceShell">
+    <header class="masthead">
+      <p class="eyebrow">ANOTHER ME <span aria-hidden="true">/</span> AN EXPERIMENT IN BEING SEEN</p>
+      <h1>Another Me</h1>
+      <p id="modeIndicator"></p>
+    </header>
+    <div class="utility" aria-label="Session controls">
+      <button type="button" data-action="view-data">View my data</button>
+      <button type="button" data-action="delete-session" class="danger">Delete session</button>
+      <button type="button" data-action="end">Pause / leave</button>
+    </div>
+    <section class="progress" aria-label="Journey progress">
+      <div class="progress-heading"><strong id="progressName"></strong><span id="progressEmotion"></span></div>
+      <ol id="progressSteps"></ol>
+    </section>
+    <aside id="presenceDock" class="presence-dock" aria-label="Camera presence"></aside>
+    <main id="stage" tabindex="-1"></main>
+    <section id="operationStatus" class="operation-status" role="status" aria-live="polite" aria-atomic="true" hidden></section>
+    <p id="status" role="status" aria-live="polite"></p>
+    <nav class="navigation" aria-label="Stage navigation">
+      <button type="button" data-action="back">Back</button>
+      <div>
+        <button type="button" data-action="skip">Skip</button>
+        <button type="button" data-action="continue" class="primary">Continue</button>
+      </div>
+    </nav>
+  </div>
+  <dialog id="dataDialog" aria-labelledby="dataTitle">
+    <div class="dialog-head"><h2 id="dataTitle">My session data</h2><button type="button" data-action="close-data">Close</button></div>
+    <div id="dataContent"></div>
+  </dialog>
+</body>
+</html>
