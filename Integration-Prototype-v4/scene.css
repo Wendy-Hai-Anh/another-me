@@ -298,8 +298,16 @@ textarea { min-height: 100px; max-height: 24vh; }
 .profile-moment .tentative { font-size: clamp(1.25rem, 2vw, 1.85rem); line-height: 1.28; }
 .profile-moment .ai-utterance .quiet-details { margin: 8px 0; }
 .profile-moment .review-controls { margin: 10px 0; }
-.contradiction-card { max-width: 850px; padding-left: 18px; border-left: 2px solid var(--accent); }
+.contradiction-card { max-width: 900px; padding-left: 18px; border-left: 2px solid var(--accent); }
 .contradiction-card h3 { margin: 0 0 5px; }
+.contradiction-description { margin: 6px 0 10px; font: 400 clamp(1.15rem, 1.8vw, 1.65rem)/1.35 "Palatino Linotype", Georgia, serif; }
+.contradiction-card .small { margin: 5px 0; }
+.contradiction-card label { margin-top: 10px; }
+.contradiction-card textarea { min-height: 72px; max-height: 16vh; }
+.contradiction-card .review-controls { gap: 7px; }
+.contradiction-card .review-controls button { min-height: 36px; padding: 5px 10px; }
+.profile-exit { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.profile-exit .controls { margin-bottom: 0; }
 .prediction-solo { margin: 14px 0; }
 .prediction-line { font-size: clamp(1.25rem, 2.3vw, 2rem); }
 .comparison { margin: 12px 0 18px; gap: 18px; }

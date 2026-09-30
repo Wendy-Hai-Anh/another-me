@@ -65,7 +65,7 @@ function newSession() {
       image: null, portrait: null, audio: null, transcript: "", transcriptOrigin: "typed",
       answers: questions.map((question, index) => ({ id: `question_${index + 1}`, question, text: "", audio: null, textOrigin: "typed" }))
     },
-    inferred: { profile: null, moments: [null, null, null], participantFeedback: [], mode: "" },
+    inferred: { profile: null, moments: [null, null, null], participantFeedback: [], contradictionFeedback: [], mode: "" },
     predicted: { predictions: [], participantAnswers: [], comparisons: [], mode: "" },
     generated: {
       proxyResponses: [], fictionalContent: [], proxyMode: "", fictionMode: "",
@@ -393,7 +393,7 @@ function render() {
   const canContinue = !sessionState.started ? false : sessionState.finished ? false : stage === 1 ? Boolean(sessionState.supplied.image && sessionState.photoConfirmed)
     : stage === 2 ? Boolean(sessionState.supplied.transcript.trim() || sessionState.audioConfirmed)
       : stage === 3 ? sessionState.questionIndex >= questions.length && Boolean(sessionState.inferred.profile)
-          && sessionState.ui.profilePage >= sessionState.inferred.profile.inferred_information.length + sessionState.inferred.profile.contradictions.length
+          && sessionState.ui.profilePage >= profileReviewCount(sessionState.inferred.profile)
         : stage === 4 ? Boolean(sessionState.ui.predictionCompared && sessionState.predicted.comparisons[0]?.rating)
           : stage === 5 ? Boolean(sessionState.generated.proxyResponses[0]?.feedback)
             : sessionState.ui.fictionAnswered;
@@ -463,15 +463,39 @@ function renderProfile() {
   const voiceOnly = sessionState.supplied.answers.filter(answer => answer.audio && !answer.text.trim()).length;
   const items = profile ? [
     ...profile.inferred_information.map(item => renderInference(item)),
-    ...profile.contradictions.map(item => `<article class="contradiction-card">${source("inferred", "POSSIBLE CONTRADICTION")}<h3>Something does not quite fit</h3><p>${escapeHtml(item.description)}</p><p class="small">Based on: ${escapeHtml(item.evidence_ids.join(", "))}. ${escapeHtml(item.possible_explanation)}</p></article>`)
+    ...(profile.contradictions.length
+      ? profile.contradictions.map((item, index) => renderContradiction(item, index))
+      : ['<article class="contradiction-card contradiction-empty">' + source("inferred", "CONTRADICTION REVIEW") + '<h3>No contradiction was identified</h3><p>The answers did not provide enough evidence for the AI to identify a clear contradiction. It has not invented one.</p><p class="small">This does not mean your answers are perfectly consistent; it means the system did not find a supported tension in this limited information.</p></article>'])
   ] : [];
   const page = Math.min(sessionState.ui.profilePage, items.length);
+  const reviewingContradictions = profile && page > profile.inferred_information.length;
+  const atFinalFinding = profile && page === items.length;
   return `<section class="profile-moment">${page === 0 ? `<p class="scene-line">${answeredCount ? `From ${answeredCount} ${answeredCount === 1 ? "answer" : "answers"}, a version of you is taking shape.` : "You chose not to answer these questions."}</p><p class="small">This is a temporary interpretation, not your complete identity.</p>
     ${voiceOnly ? `<p class="warning">${voiceOnly} voice ${voiceOnly === 1 ? "answer was" : "answers were"} recorded, not skipped, but could not be interpreted without transcription. Review the questions and retry transcription.</p>` : ""}` : ""}
     ${sessionState.inferred.mode === "mock" ? '<p class="fallback-label">SIMULATED AI INTERPRETATION</p>' : ""}
-    ${profile ? `<p class="question-count">PROFILE ${page + 1} / ${items.length + 1}</p>${page === 0 ? `<blockquote class="profile-summary">${escapeHtml(profile.profile_summary)}</blockquote><p class="small">${profile.inferred_information.length} tentative interpretations · ${profile.contradictions.length} possible contradictions</p>${!profile.contradictions.length ? '<p class="small">No contradiction was identified in these answers; the system has not invented one.</p>' : ""}` : items[page - 1]}
-      ${buttons([...(page ? [["previous-profile-item", "Previous finding"]] : []), ...(page < items.length ? [["next-profile-item", "Review next finding", "primary"]] : [])])}` : '<p class="inline-note">No profile yet. Finish all three answers, then try again.</p>'}
-    ${page === 0 ? buttons([["regenerate-profile", profile ? "Try the profile again" : "Generate profile", "", busy], ["mock-profile", "Use simulated profile"], ["review-questions", "Review my answers"]]) : ""}</section>`;
+    ${profile ? `<p class="question-count">${reviewingContradictions ? "CONTRADICTION REVIEW" : "IDENTITY PROFILE"} ${page + 1} / ${items.length + 1}</p>${page === 0 ? `<blockquote class="profile-summary">${escapeHtml(profile.profile_summary)}</blockquote><p class="small">${profile.inferred_information.length} tentative interpretations · ${profile.contradictions.length} possible contradictions</p>` : items[page - 1]}
+      ${buttons([...(page ? [["previous-profile-item", "Previous finding"]] : []), ...(page < items.length ? [["next-profile-item", page === profile.inferred_information.length ? "Review contradictions" : "Review next finding", "primary"]] : [])])}
+      ${atFinalFinding ? `<div class="profile-exit"><p class="small">You have reached the end of this temporary profile review.</p>${buttons([["regenerate-profile", "Retry profile", "", busy], ["review-questions", "Review my answers"], ["profile-move-on", "Move on", "primary"]])}</div>` : ""}` : '<p class="inline-note">No profile yet. Finish all three answers, then try again.</p>'}
+    ${page === 0 ? buttons([["regenerate-profile", profile ? "Retry profile" : "Generate profile", "", busy], ["mock-profile", "Use simulated profile"], ["review-questions", "Review my answers"]]) : ""}</section>`;
+}
+function profileReviewCount(profile) {
+  if (!profile) return 0;
+  return profile.inferred_information.length + Math.max(1, profile.contradictions.length);
+}
+function contradictionId(index) { return `contradiction_${index + 1}`; }
+function renderContradiction(item, index) {
+  const id = contradictionId(index);
+  const feedback = sessionState.inferred.contradictionFeedback.find(row => row.id === id);
+  const verdictLabels = {
+    accurate: "This tension is accurate",
+    "context-needed": "Needs more context",
+    "not-a-contradiction": "Not a contradiction"
+  };
+  return `<article class="contradiction-card">${source("inferred", "POSSIBLE CONTRADICTION")}<h3>Something does not quite fit</h3><p class="contradiction-description">${escapeHtml(item.description)}</p>
+    <p class="small"><strong>Based on:</strong> ${escapeHtml(item.evidence_ids.join(", "))}.</p><p class="small"><strong>Possible explanation:</strong> ${escapeHtml(item.possible_explanation)}</p>
+    <label for="contradictionExplanation">Explain or correct this contradiction</label><textarea id="contradictionExplanation" rows="3" placeholder="Add context the AI could not see…">${escapeHtml(feedback?.explanation || "")}</textarea>
+    ${feedback ? `<p class="review-note">Your response: ${escapeHtml(verdictLabels[feedback.verdict] || feedback.verdict)}${feedback.explanation ? ` · “${escapeHtml(feedback.explanation)}”` : ""}</p>` : ""}
+    <div class="controls review-controls"><button data-action="review-contradiction" data-id="${id}" data-verdict="accurate">This tension is accurate</button><button data-action="review-contradiction" data-id="${id}" data-verdict="context-needed">It needs context</button><button data-action="review-contradiction" data-id="${id}" data-verdict="not-a-contradiction">This is not a contradiction</button></div></article>`;
 }
 function renderInference(item) {
   const feedback = sessionState.inferred.participantFeedback.find(row => row.id === item.id);
@@ -620,6 +644,7 @@ function identityContext() {
   return {
     profile: sessionState.inferred.profile,
     profile_feedback: sessionState.inferred.participantFeedback,
+    contradiction_feedback: sessionState.inferred.contradictionFeedback,
     prediction: sessionState.predicted.predictions[0] || null,
     participant_prediction_answer: sessionState.predicted.participantAnswers[0] || null,
     prediction_comparison: sessionState.predicted.comparisons[0] || null
@@ -653,6 +678,7 @@ function invalidateAnalysis() {
   sessionState.inferred.moments = [null, null, null];
   sessionState.inferred.mode = "";
   sessionState.inferred.participantFeedback = [];
+  sessionState.inferred.contradictionFeedback = [];
   sessionState.predicted = { predictions: [], participantAnswers: [], comparisons: [], mode: "" };
   sessionState.predictionShown = false;
   sessionState.ui.questionRevealed = [false, false, false];
@@ -740,6 +766,8 @@ async function generateProfile(inlineQuestion = null) {
     if (!profile || !Array.isArray(profile.inferred_information) || !Array.isArray(profile.supplied_information)) throw new OperationFailure("empty_response", "The profile response was invalid.");
     sessionState.inferred.profile = profile;
     sessionState.inferred.mode = useMock ? "mock" : "real";
+    sessionState.inferred.participantFeedback = [];
+    sessionState.inferred.contradictionFeedback = [];
     sessionState.ui.profilePage = 0;
     if (inlineQuestion !== null) {
       const id = sessionState.supplied.answers[inlineQuestion].id;
@@ -1160,6 +1188,7 @@ function renderData() {
   if (sessionState.predicted.participantAnswers[0]?.audio) supplied.push(dataItem("Your spoken prediction answer", sessionState.predicted.participantAnswers[0].audio.type, "prediction-audio", `<audio controls src="${sessionState.predicted.participantAnswers[0].audio.url}"></audio>`));
   if (sessionState.predicted.comparisons[0]?.rating) supplied.push(dataItem("Your prediction rating", sessionState.predicted.comparisons[0].rating, "comparison"));
   sessionState.inferred.participantFeedback.forEach(item => supplied.push(dataItem(`Your review of ${item.id}`, `${item.verdict}${item.correction ? `: ${item.correction}` : ""}`, `inference-review:${item.id}`)));
+  sessionState.inferred.contradictionFeedback.forEach(item => supplied.push(dataItem(`Your contradiction review ${item.id}`, `${item.verdict}${item.explanation ? `: ${item.explanation}` : ""}`, `contradiction-review:${item.id}`)));
   const inferred = sessionState.inferred.profile?.inferred_information.map(item => dataItem("AI inference", item.statement, `inference:${item.id}`)) || [];
   const predicted = sessionState.predicted.predictions.map((item,index) => dataItem("AI prediction", item.predicted_response || "Insufficient evidence", `prediction:${index}`));
   const generated = [
@@ -1180,6 +1209,7 @@ function deleteItem(key) {
   else if (key.startsWith("answer:")) { sessionState.supplied.answers[Number(key.split(":")[1])].text = ""; invalidateAnalysis(); render(); }
   else if (key.startsWith("inference:")) sessionState.inferred.profile.inferred_information = sessionState.inferred.profile.inferred_information.filter(item => item.id !== key.slice(10));
   else if (key.startsWith("inference-review:")) sessionState.inferred.participantFeedback = sessionState.inferred.participantFeedback.filter(item => item.id !== key.slice(17));
+  else if (key.startsWith("contradiction-review:")) sessionState.inferred.contradictionFeedback = sessionState.inferred.contradictionFeedback.filter(item => item.id !== key.slice(21));
   else if (key === "actual-answer") { const answer = sessionState.predicted.participantAnswers[0]; if (answer) { answer.text = ""; answer.textOrigin = "typed"; } }
   else if (key === "prediction-audio") setRecording("prediction-answer", null);
   else if (key === "comparison") sessionState.predicted.comparisons = [];
@@ -1244,6 +1274,7 @@ document.addEventListener("click", async event => {
   else if (action === "review-questions") { sessionState.questionIndex = 0; render(); }
   else if (action === "previous-profile-item") { sessionState.ui.profilePage = Math.max(0, sessionState.ui.profilePage - 1); render(); }
   else if (action === "next-profile-item") { sessionState.ui.profilePage += 1; render(); }
+  else if (action === "profile-move-on") move("continue");
   else if (action === "regenerate-profile") generateProfile();
   else if (action === "mock-profile") { sessionState.inferred.profile = mockProfile(readableAnswers()); sessionState.inferred.mode = "mock"; sessionState.questionIndex = questions.length; setOperationState("identity", "fallback", { message: operationDefinitions.identity.fallback, detail: "MOCK AI OUTPUT is shown instead of a live API result." }); render(); status("Clearly marked mock profile ready.", "success"); }
   else if (action === "predict") generatePrediction();
@@ -1264,6 +1295,13 @@ document.addEventListener("click", async event => {
     sessionState.ui.correctingInferenceId = ""; render();
   }
   else if (action === "cancel-inference-correction") { sessionState.ui.correctingInferenceId = ""; render(); }
+  else if (action === "review-contradiction") {
+    const id = button.dataset.id;
+    const explanation = document.getElementById("contradictionExplanation")?.value?.trim() || "";
+    sessionState.inferred.contradictionFeedback = sessionState.inferred.contradictionFeedback.filter(item => item.id !== id);
+    sessionState.inferred.contradictionFeedback.push({ id, verdict: button.dataset.verdict, explanation });
+    render(); status("Your contradiction review has been kept with the original AI interpretation.", "success");
+  }
   else if (action === "allow-proxy") { sessionState.consent.proxyResponse = true; render(); }
   else if (action === "toggle-voice") {
     sessionState.consent.voiceCloning = !sessionState.consent.voiceCloning;
@@ -1311,6 +1349,15 @@ document.addEventListener("input", event => {
   if (event.target.id === "questionText") { const answer = sessionState.supplied.answers[sessionState.questionIndex]; answer.text = event.target.value; answer.textOrigin = "typed"; invalidateAnalysis(); const next = document.querySelector('[data-action="next-question"]'); if (next) next.disabled = !event.target.value.trim(); }
   if (event.target.id === "actualAnswer") { sessionState.predicted.participantAnswers = [{ ...sessionState.predicted.participantAnswers[0], text: event.target.value, textOrigin: "typed" }]; const next = document.querySelector('[data-action="compare-prediction"]'); if (next) next.disabled = !event.target.value.trim(); }
   if (event.target.id === "predictionCorrection") sessionState.predicted.comparisons = [{ rating: sessionState.predicted.comparisons[0]?.rating || "", explanation: event.target.value }];
+  if (event.target.id === "contradictionExplanation") {
+    const profile = sessionState.inferred.profile;
+    const index = profile ? sessionState.ui.profilePage - profile.inferred_information.length - 1 : -1;
+    if (index >= 0) {
+      const id = contradictionId(index);
+      const existing = sessionState.inferred.contradictionFeedback.find(item => item.id === id);
+      if (existing) existing.explanation = event.target.value;
+    }
+  }
   if (event.target.id === "unclearLabel") sessionState.feedback.unclearLabel = event.target.value;
   if (event.target.id === "finalExplanation") sessionState.feedback.finalExplanation = event.target.value;
 });
