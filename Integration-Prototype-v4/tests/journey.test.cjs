@@ -233,7 +233,7 @@ test("Stage 3 waits for all answers and shows contradictions as review pages", a
   assert.match(h.run("renderProfile()"), /question_1, question_2/);
   assert.match(h.run("renderProfile()"), /Explain or correct this contradiction/);
   assert.match(h.run("renderProfile()"), /Retry profile/);
-  assert.match(h.run("renderProfile()"), /Move on/);
+  assert.match(h.run("renderProfile()"), /Next stage/);
   h.run('document.getElementById("contradictionExplanation").value = "The situation changes what I prioritise."');
   await h.dispatch("click", { target: { closest: () => ({ disabled: false, dataset: { action: "review-contradiction", id: "contradiction_1", verdict: "context-needed" } }) } });
   assert.equal(h.run("sessionState.inferred.contradictionFeedback[0].verdict"), "context-needed");
@@ -245,7 +245,7 @@ test("Stage 3 includes an explicit contradiction review even when none is detect
   h.run('sessionState.currentStage = 3; sessionState.questionIndex = 3; sessionState.inferred.profile = mockProfile([]); sessionState.ui.profilePage = profileReviewCount(sessionState.inferred.profile); render()');
   assert.match(h.run("renderProfile()"), /No contradiction was identified/);
   assert.match(h.run("renderProfile()"), /Retry profile/);
-  assert.match(h.run("renderProfile()"), /Move on/);
+  assert.match(h.run("renderProfile()"), /Next stage/);
   assert.equal(h.elements.get('.navigation [data-action="continue"]').disabled, false);
 });
 test("Stage 2 confirmed recording transcribes with explicit consent in mock mode", async () => {
