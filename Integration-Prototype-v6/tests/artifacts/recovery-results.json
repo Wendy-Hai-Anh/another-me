@@ -1,0 +1,11 @@
+[
+  "Contradiction explanation preserved; paginated evidence; rejection invalidates earlier simulation",
+  "OpenAI failure retains inputs and existing result; explicit mock fallback succeeds",
+  "Timeout retains input; repeated generation clicks produce one request",
+  "Microphone/camera denial retains typed fallback and usable camera switch",
+  "Transcription failure preserves recording; retry writes spoken answer into identity input",
+  "Independent consent checkpoint; missing portrait blocked; voice failure retains text; D-ID failure retains audio; mocked media success",
+  "All eight proxy/voice/face consent combinations; no automatic generation; missing voice sample returns to setup",
+  "Long AI result and My Data remain readable in paginated 640x360 viewport (200% desktop layout equivalent)",
+  "Delete during generation prevents late output restoring personal data; no JavaScript errors"
+]

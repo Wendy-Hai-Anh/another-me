@@ -127,8 +127,9 @@ test("stage navigation includes an accessible reduced-motion-aware transition", 
   assert.match(html, /aria-live="polite"/);
   assert.match(html, /stage-transition__pixels/);
   assert.doesNotMatch(html, /stage-transition__title/);
-  assert.match(html, /immersive\.css/);
-  assert.match(html, /immersive\.js/);
+  assert.match(html, /v6\.css/);
+  assert.match(html, /motion\.js/);
+  assert.match(html, /v6\.js/);
   assert.doesNotMatch(html, /id="chapter"/);
   assert.match(script, /showStageTransition\(sessionState\.currentStage/);
   assert.match(script, /prefers-reduced-motion: reduce/);

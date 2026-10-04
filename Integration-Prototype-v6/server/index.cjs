@@ -8,10 +8,13 @@ dotenv.config({ path: path.join(root, ".env.local"), quiet: true });
 dotenv.config({ path: path.join(root, "..", ".env.local"), quiet: true, override: false });
 const adapter = require("./openai-adapter.cjs");
 const media = require("./media-service.cjs");
+const proxyText = require("../proxy-text.js");
+const { createSimulation } = require("./simulation-service.cjs");
 const { validateParticipantAnswers } = require("./schemas.cjs");
+const { safeError, diagnosticCode } = require("./safe-errors.cjs");
 
 const host = "127.0.0.1";
-const port = Number(process.env.INTEGRATION_PORT ?? 4183);
+const port = Number(process.env.INTEGRATION_PORT ?? 4187);
 const assets = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
@@ -21,7 +24,12 @@ const assets = new Map([
   ["/scene.css", ["scene.css", "text/css; charset=utf-8"]],
   ["/immersive.css", ["immersive.css", "text/css; charset=utf-8"]],
   ["/script.js", ["script.js", "text/javascript; charset=utf-8"]],
-  ["/immersive.js", ["immersive.js", "text/javascript; charset=utf-8"]]
+  ["/immersive.js", ["immersive.js", "text/javascript; charset=utf-8"]],
+  ["/v6.css", ["v6.css", "text/css; charset=utf-8"]],
+  ["/v6.js", ["v6.js", "text/javascript; charset=utf-8"]],
+  ["/motion.js", ["motion.js", "text/javascript; charset=utf-8"]],
+  ["/proxy-text.js", ["proxy-text.js", "text/javascript; charset=utf-8"]],
+  ["/simulation-core.js", ["simulation-core.js", "text/javascript; charset=utf-8"]]
 ]);
 const maxJson = 64 * 1024;
 const maxMediaJson = 24 * 1024 * 1024;
@@ -59,15 +67,6 @@ function requireAnswers(answers) {
   const problems = validateParticipantAnswers(answers);
   if (problems.length) throw Object.assign(new Error("Participant answers are invalid."), { statusCode: 400 });
 }
-function safeError(error) {
-  if (error.publicMessage) return [error.statusCode || 502, error.publicMessage];
-  if (error.statusCode === 503 && !process.env.OPENAI_API_KEY) return [503, "OPENAI_API_KEY is missing on the integration server. Set it in the server environment or repository .env.local, then restart the server."];
-  if (error.statusCode && error.statusCode < 500) return [error.statusCode, error.message];
-  if (error.status === 401 || error.status === 403) return [503, "OpenAI rejected the server API key. Check its project access and restart the server."];
-  if (error.status === 429) return [503, "OpenAI rate limit or quota reached. Check API billing and retry later."];
-  if (error.status === 400 || error.status === 415) return [422, "OpenAI could not read this audio. Play it back, then record again in a supported format."];
-  return [502, "OpenAI is unavailable. Check the server connection and retry the recording later."];
-}
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${host}:${port}`);
@@ -84,7 +83,7 @@ const server = http.createServer(async (request, response) => {
       }); return;
     }
     if (request.method === "GET" && url.pathname === "/favicon.ico") { response.writeHead(204).end(); return; }
-    if (request.method !== "POST" || !["/api/transcribe","/api/profile","/api/predict","/api/proxy","/api/fiction","/api/cloned-speech","/api/talking-avatar"].includes(url.pathname)) { json(response, 404, { error: "Not found." }); return; }
+    if (request.method !== "POST" || !["/api/transcribe","/api/profile","/api/predict","/api/proxy","/api/fiction","/api/simulation","/api/cloned-speech","/api/talking-avatar"].includes(url.pathname)) { json(response, 404, { error: "Not found." }); return; }
     if (request.headers.origin && request.headers.origin !== `http://${host}:${port}`) { json(response, 403, { error: "Cross-origin requests are not allowed." }); return; }
     if (url.pathname === "/api/transcribe") {
       const type = (request.headers["content-type"] || "").split(";", 1)[0].toLowerCase();
@@ -95,7 +94,10 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/api/cloned-speech") {
       const type = (request.headers["content-type"] || "").split(";", 1)[0].toLowerCase();
       if (!media.audioExtensions.has(type)) { json(response, 415, { error: "Unsupported voice-sample format." }); return; }
-      const speech = await media.createClonedSpeech(await body(request, maxAudio), type, url.searchParams.get("text") || "");
+      let script;
+      try { script = proxyText.forSpeech(url.searchParams.get("text") || ""); }
+      catch (error) { throw Object.assign(error, { statusCode: 422 }); }
+      const speech = await media.createClonedSpeech(await body(request, maxAudio), type, script);
       headers(response, "audio/mpeg"); response.writeHead(200).end(speech); return;
     }
     if (url.pathname === "/api/talking-avatar") {
@@ -107,8 +109,46 @@ const server = http.createServer(async (request, response) => {
       headers(response, "video/mp4"); response.writeHead(200).end(video); return;
     }
     const input = await jsonBody(request);
+    if (url.pathname === "/api/simulation") {
+      if (!input || !Array.isArray(input.answers) || input.answers.length > 12 || !input.answers.every(a => a && typeof a.id === "string" && typeof a.answer === "string" && a.answer.length <= 4000)
+        || input.context && (typeof input.context !== "object" || Array.isArray(input.context))
+        || [input.context?.profile_feedback, input.context?.contradiction_feedback, input.context?.profile?.inferred_information, input.context?.profile?.contradictions, input.seen_scenarios, input.discussed_questions].some(value => value !== undefined && !Array.isArray(value))) {
+        json(response, 400, { error: "Please review your answers before generating a simulation." }); return;
+      }
+      const lists = input.context || {};
+      const invalidRows = [lists.profile_feedback, lists.contradiction_feedback, lists.profile?.inferred_information, lists.profile?.contradictions]
+        .some(rows => rows && (rows.length > 40 || rows.some(row => !row || typeof row !== "object" || Array.isArray(row))));
+      const invalidStrings = [input.seen_scenarios, input.discussed_questions]
+        .some(rows => rows && (rows.length > 40 || rows.some(row => typeof row !== "string" || row.length > 4000)));
+      if (invalidRows || invalidStrings) { json(response, 400, { error: "Please review your profile before generating a simulation." }); return; }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 150_000);
+      const cancel = () => { if (!response.writableEnded) controller.abort(); };
+      response.on("close", cancel);
+      try { json(response, 200, { simulation: await createSimulation(input, { signal: controller.signal }) }); }
+      catch (error) {
+        if (controller.signal.aborted) throw Object.assign(new Error("Simulation timed out."), { statusCode: 504, publicMessage: "The hypothetical simulation took too long. Your earlier information is unchanged; you can retry or skip." });
+        throw error;
+      }
+      finally { clearTimeout(timer); response.off("close", cancel); }
+      return;
+    }
     requireAnswers(input.answers);
-    if (url.pathname === "/api/profile") { const result = await adapter.createIdentityProfile(input.answers); json(response, 200, { profile: result.data }); return; }
+    if (url.pathname === "/api/profile") {
+      const controller = new AbortController();
+      let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 90_000);
+      const cancel = () => { if (!response.writableEnded) controller.abort(); };
+      response.on("close", cancel);
+      try {
+        const result = await adapter.createIdentityProfile(input.answers, { signal: controller.signal });
+        if (!response.destroyed) json(response, 200, { profile: result.data });
+      } catch (error) {
+        if (timedOut) throw Object.assign(new Error("Profile deadline reached."), { code: "timeout", statusCode: 504 });
+        throw error;
+      } finally { clearTimeout(timer); response.off("close", cancel); }
+      return;
+    }
     if (url.pathname === "/api/predict") {
       if (typeof input.target_question !== "string" || !input.target_question.trim()) throw Object.assign(new Error("A target question is required."), { statusCode: 400 });
       const result = await adapter.createPrediction({ answers: input.answers, profile: input.profile, targetQuestion: input.target_question });
@@ -118,8 +158,10 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/api/fiction") { json(response, 200, { fiction: await adapter.generate("fiction", input.answers, "Invent a clearly fictional hypothetical memory.", input.context) }); return; }
   } catch (error) {
     const [code, message] = safeError(error);
-    console.error(`[integration-api] ${error.code || error.name || "error"} status=${code}`);
-    json(response, code, { error: message });
+    const diagnostic = diagnosticCode(error);
+    const provider = ["D-ID", "ElevenLabs"].includes(error.provider) ? error.provider : "OpenAI";
+    console.error(`[integration-api] ${diagnostic} provider=${provider} status=${code}`);
+    if (!response.destroyed) json(response, code, { error: message, code: diagnostic, provider });
   }
 });
 if (require.main === module) {

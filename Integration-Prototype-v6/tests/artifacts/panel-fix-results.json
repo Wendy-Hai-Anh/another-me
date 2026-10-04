@@ -1,0 +1,9 @@
+[
+  "1900x850: Begin/question CTAs stay with prompts; spaces intact; exactly three consent screens with and without a sample",
+  "1280x720: Begin/question CTAs stay with prompts; spaces intact; exactly three consent screens with and without a sample",
+  "390x844: Begin/question CTAs stay with prompts; spaces intact; exactly three consent screens with and without a sample",
+  "360x640: Begin/question CTAs stay with prompts; spaces intact; exactly three consent screens with and without a sample",
+  "640x360: Begin/question CTAs stay with prompts; spaces intact; exactly three consent screens with and without a sample",
+  "Phone: record/playback on voice panel; camera/capture/confirmation/retake on portrait panel, one preview only",
+  "Phone: permission-denied recovery does not obscure portrait consent or navigation"
+]

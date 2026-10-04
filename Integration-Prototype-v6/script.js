@@ -85,6 +85,7 @@ function newSession() {
 }
 let sessionState = newSession();
 let cameraStream = null;
+let cameraStoppedAt = 0;
 let micStream = null;
 let recorder = null;
 let chunks = [];
@@ -247,6 +248,7 @@ async function applyDevelopmentScenario(key, signal) {
 }
 function friendlyFailure(key, error) {
   const label = operationDefinitions[key].label;
+  if (error?.safeDiagnostic) return { state: error.code.includes("timeout") ? "timeout" : "error", code: error.code, message: error.message };
   if (key === "fiction" && error?.message?.includes("did not clearly separate borrowed and invented details"))
     return { state: "error", code: "invalid_fiction", message: "The invented scene did not clearly distinguish your words from AI-made details. Try again or choose the labelled simulated scene." };
   if (error?.code === "timeout") return { state: "timeout", code: "timeout", message: key === "did" && error.message
@@ -266,7 +268,7 @@ function friendlyFailure(key, error) {
 }
 function failOperation(key, error) {
   const failure = friendlyFailure(key, error);
-  console.error(`[another-me:${key}]`, error);
+  console.error(`[another-me:${key}] code=${failure.code}`);
   setOperationState(key, failure.state, { message: failure.message, detail: operationDefinitions[key].fallback, errorCode: failure.code });
   render();
   status(failure.message, "error");
@@ -302,7 +304,7 @@ async function runOperation(key, task) {
   } catch (error) {
     if (ticket !== generation || error?.code === "cancelled") return undefined;
     const failure = friendlyFailure(key, error);
-    console.error(`[another-me:${key}]`, error);
+    console.error(`[another-me:${key}] code=${failure.code}`);
     setOperationState(key, failure.state, { message: failure.message, detail: operationDefinitions[key].fallback, errorCode: failure.code });
     status(failure.message, "error");
     return undefined;
@@ -685,6 +687,7 @@ function identityContext() {
   };
 }
 function bestVoiceRecording() {
+  if (sessionState.ui.selectedVoiceTarget) return recordingFor(sessionState.ui.selectedVoiceTarget);
   return [sessionState.supplied.audio, ...sessionState.supplied.answers.map(answer => answer.audio), sessionState.predicted.participantAnswers[0]?.audio]
     .filter(item => item?.blob)
     .sort((left, right) => right.blob.size - left.blob.size)[0] || null;
@@ -729,7 +732,8 @@ function invalidateAnalysis() {
     sessionState.operations[key] = { state: "idle", message: "", detail: "", errorCode: "", updatedAt: 0 };
   });
 }
-function responseFailure(response, message = "The service request failed.") {
+function responseFailure(response, message = "The service request failed.", diagnostic = "") {
+  if (/^[a-z][a-z0-9_]{1,64}$/.test(diagnostic)) return Object.assign(new OperationFailure(diagnostic, message, response.status), { safeDiagnostic: true });
   const normalized = String(message).toLowerCase();
   const code = response.status === 429 || normalized.includes("rate limit") || normalized.includes("quota") ? "rate_limit"
     : [408, 504].includes(response.status) || normalized.includes("timed out") ? "timeout"
@@ -751,7 +755,7 @@ async function callApi(path, payload, format = "json", signal) {
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw responseFailure(response, body.error || "The integration service could not complete the request.");
+    throw responseFailure(response, body.error || "The integration service could not complete the request.", body.code);
   }
   if (format === "audio") return response.text();
   try { return await response.json(); }
@@ -770,7 +774,7 @@ async function callBinaryApi(path, payload, contentType, signal) {
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw responseFailure(response, body.error || "The media service could not complete the request.");
+    throw responseFailure(response, body.error || "The media service could not complete the request.", body.code);
   }
   const blob = await response.blob();
   if (!blob.size) throw new OperationFailure("empty_response", "The media service returned an empty file.");
@@ -856,7 +860,7 @@ async function generateProxyMedia() {
       callBinaryApi(`/api/cloned-speech?text=${encodeURIComponent(proxySpeechText(item.text))}`, sample.blob, sample.type, signal));
     if (!speech) {
       media.presentation = "text";
-      media.error = "Voice generation did not finish. The first-person response remains available as text.";
+      media.error = `${sessionState.operations.elevenlabs.message} [${sessionState.operations.elevenlabs.errorCode}] The response remains available as text.`;
       render();
       return;
     }
@@ -872,7 +876,7 @@ async function generateProxyMedia() {
     }), "application/json", signal));
     if (!video) {
       media.presentation = "cloned-audio";
-      media.error = "Animation did not finish. The temporary cloned audio remains available with the still portrait.";
+      media.error = `${sessionState.operations.did.message} [${sessionState.operations.did.errorCode}] Your cloned audio is still available. Retry animation reuses it.`;
       render();
       return;
     }
@@ -902,21 +906,36 @@ async function generateFiction() {
 
 function revoke(item) { if (item?.url) URL.revokeObjectURL(item.url); }
 function stopCamera() {
+  if (cameraStream) cameraStoppedAt = Date.now();
   cameraStream?.getTracks().forEach(track => track.stop());
   cameraStream = null;
   const video = document.getElementById("cameraVideo");
-  if (video) video.srcObject = null;
+  if (video) { video.pause?.(); video.srcObject = null; video.load?.(); }
   const presence = document.getElementById("presenceVideo");
-  if (presence) presence.srcObject = null;
+  if (presence) { presence.pause?.(); presence.srcObject = null; presence.load?.(); }
 }
 async function enableCamera() {
   if (!sessionState.consent.photoCapture && !sessionState.consent.cameraPresence) return status("Choose to enable the camera first.", "error");
   if (!isSecureContext || !navigator.mediaDevices?.getUserMedia) return failOperation("camera", new OperationFailure("unsupported", "Camera access is unsupported."));
   if (cameraStream || activeOperations.has("camera")) return;
   await runOperation("camera", async ({ signal }) => {
-    const pending = navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "user" } }, audio: false });
-    pending.then(stream => { if (signal.aborted) stream.getTracks().forEach(track => track.stop()); }).catch(() => {});
-    const stream = await pending;
+    const releaseDelay = 2000 - (Date.now() - cameraStoppedAt);
+    if (releaseDelay > 0) await abortableDelay(releaseDelay, signal);
+    const requestStream = (defaultDevice = false) => {
+      if (signal.aborted) throw new OperationFailure("cancelled", "Camera request stopped.");
+      const pending = navigator.mediaDevices.getUserMedia({ video: defaultDevice ? true : { facingMode: { ideal: "user" } }, audio: false });
+      pending.then(stream => { if (signal.aborted) stream.getTracks().forEach(track => track.stop()); }).catch(() => {});
+      return pending;
+    };
+    let stream;
+    try { stream = await requestStream(); }
+    catch (error) {
+      // A just-stopped device can still be closing. Retry this transient error once, never a permission denial.
+      const justStopped = Date.now() - cameraStoppedAt < 5000;
+      if (!(error.name === "AbortError" || error.name === "NotFoundError" || justStopped && error.name === "NotReadableError") || signal.aborted) throw error;
+      await abortableDelay(1000, signal);
+      stream = await requestStream(true);
+    }
     if (signal.aborted || sessionState.ended || !sessionState.started || sessionState.currentStage > 5) {
       stream.getTracks().forEach(track => track.stop());
       throw new OperationFailure("cancelled", "Camera request stopped.");
@@ -993,11 +1012,13 @@ function stopRecorder(discard = false) {
   if (discard) { recorder = null; chunks = []; recordTarget = null; }
 }
 function recordingFor(target) {
+  if (target === "clone-sample") return sessionState.supplied.cloneSample;
   if (target === "story") return sessionState.supplied.audio;
   if (target === "prediction-answer") return sessionState.predicted.participantAnswers[0]?.audio;
   return sessionState.supplied.answers.find(row => row.id === target)?.audio;
 }
 function setRecording(target, value) {
+  if (target === "clone-sample") { revoke(sessionState.supplied.cloneSample); sessionState.supplied.cloneSample = value; clearProxyMedia(); return; }
   if (target === "story") {
     revoke(sessionState.supplied.audio); sessionState.supplied.audio = value; sessionState.audioConfirmed = false;
     if (sessionState.supplied.transcriptOrigin === "transcribed") { sessionState.supplied.transcript = ""; sessionState.supplied.transcriptOrigin = "typed"; }
@@ -1022,13 +1043,13 @@ async function startRecording() {
   if (recorder || activeOperations.has("microphone")) return;
   if (!isSecureContext || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") return failOperation("microphone", new OperationFailure("unsupported", "Microphone recording is unsupported."));
   const target = sessionState.currentStage === 2 ? "story" : sessionState.currentStage === 3 ? sessionState.supplied.answers[sessionState.questionIndex]?.id
-    : sessionState.currentStage === 4 && sessionState.predictionShown ? "prediction-answer" : null;
+    : sessionState.currentStage === 4 && sessionState.predictionShown ? "prediction-answer" : sessionState.currentStage === 5 && sessionState.ui.v6?.checkpoint ? "clone-sample" : null;
   if (!target) return;
   await runOperation("microphone", async ({ signal }) => {
     const pending = navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     pending.then(stream => { if (signal.aborted) stream.getTracks().forEach(track => track.stop()); }).catch(() => {});
     const stream = await pending;
-    if (signal.aborted || sessionState.ended || ![2, 3, 4].includes(sessionState.currentStage)) {
+    if (signal.aborted || sessionState.ended || ![2, 3, 4, 5].includes(sessionState.currentStage)) {
       stream.getTracks().forEach(track => track.stop());
       throw new OperationFailure("cancelled", "Microphone request stopped.");
     }
@@ -1047,7 +1068,7 @@ async function startRecording() {
         status(target === "story" ? "Recording ready. Listen and confirm it before transcription." : "Voice answer recorded. Transcribing your words...", "success");
       } else failOperation("microphone", new OperationFailure("empty_response", "The recording was empty."));
       render();
-      if (blob.size && target !== "story" && sessionState.consent.transcription) void transcribeCurrent(target);
+      if (blob.size && target !== "story" && target !== "clone-sample" && sessionState.consent.transcription) void transcribeCurrent(target);
     };
     recorder.onerror = event => {
       stopRecorder(true);
@@ -1193,6 +1214,7 @@ function clearMedia() {
   stopCamera(); stopRecorder(true); stopMicTracks();
   if ("speechSynthesis" in window) speechSynthesis.cancel();
   revoke(sessionState.supplied.image); revoke(sessionState.supplied.portrait); revoke(sessionState.supplied.audio);
+  revoke(sessionState.supplied.cloneSample);
   revoke(sessionState.predicted.participantAnswers[0]?.audio);
   sessionState.supplied.answers.forEach(answer => revoke(answer.audio));
   clearProxyMedia();

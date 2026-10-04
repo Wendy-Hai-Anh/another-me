@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Another Me | A Presence in the Room</title>
-  <link rel="stylesheet" href="/style.css">
-  <link rel="stylesheet" href="/resilience.css">
-  <link rel="stylesheet" href="/experience.css">
-  <link rel="stylesheet" href="/scene.css">
-  <link rel="stylesheet" href="/immersive.css">
-  <script src="/script.js" defer></script>
-  <script src="/immersive.js" defer></script>
+  <title>Another Me | Entering the Digital Double</title>
+  <meta name="another-me-build" content="v6-20261005-screen1">
+  <link rel="stylesheet" href="/v6.css?v=v6-20261005-screen1">
+  <script src="/proxy-text.js?v=v6-20261005-screen1" defer></script>
+  <script src="/script.js?v=v6-20261005-screen1" defer></script>
+  <script src="/simulation-core.js?v=v6-20261005-screen1" defer></script>
+  <script src="/motion.js?v=v6-20261005-screen1" defer></script>
+  <script src="/v6.js?v=v6-20261005-screen1" defer></script>
 </head>
 <body>
   <canvas id="atmo" aria-hidden="true"></canvas>
@@ -19,24 +19,29 @@
       <p class="eyebrow">ANOTHER ME <span aria-hidden="true">/</span> AN EXPERIMENT IN BEING SEEN</p>
       <h1>Another Me</h1>
       <p id="modeIndicator"></p>
+      <small id="buildId">v6-20261005-screen1</small>
     </header>
     <div class="utility" aria-label="Session controls">
-      <button type="button" id="voiceToggle" aria-pressed="false">Hands-free voice: off</button>
+      <button type="button" id="motionToggle" aria-pressed="false">Reduce motion</button>
       <button type="button" data-action="view-data">My data</button>
       <button type="button" data-action="delete-session" class="danger">Delete session</button>
-      <button type="button" data-action="end">Pause</button>
+      <button type="button" data-action="end">End experience</button>
     </div>
     <section class="progress" aria-label="Journey progress">
       <div class="progress-heading"><strong id="progressName"></strong><span id="progressEmotion"></span></div>
       <ol id="progressSteps"></ol>
+      <div id="claimContext" hidden></div>
+      <p id="recordingIndicator" role="status" hidden>Recording <output id="ambientRecordClock">00:00</output></p>
     </section>
     <aside id="presenceDock" class="presence-dock" aria-label="Camera presence"></aside>
     <main id="stage" tabindex="-1"></main>
+    <nav id="panelPager" aria-label="Read this stage in panels" hidden></nav>
     <section id="operationStatus" class="operation-status" role="status" aria-live="polite" aria-atomic="true" hidden></section>
     <p id="status" role="status" aria-live="polite"></p>
     <nav class="navigation" aria-label="Stage navigation">
       <button type="button" data-action="back">Back</button>
       <div>
+        <button type="button" data-v6="text-only" id="footerTextOnly" hidden>Use text only</button>
         <button type="button" data-action="skip">Skip</button>
         <button type="button" data-action="continue" class="primary">Continue</button>
       </div>
@@ -45,6 +50,11 @@
   <dialog id="dataDialog" aria-labelledby="dataTitle">
     <div class="dialog-head"><h2 id="dataTitle">My session data</h2><button type="button" data-action="close-data">Close</button></div>
     <div id="dataContent"></div>
+    <nav id="dataPager" aria-label="Data panels"></nav>
+  </dialog>
+  <dialog id="readerDialog" aria-labelledby="readerTitle">
+    <div class="dialog-head"><h2 id="readerTitle"></h2><button type="button" data-v6="close-reader">Close</button></div>
+    <div id="readerContent"></div><nav id="readerPager" aria-label="Explanation panels"></nav>
   </dialog>
   <section id="stageTransition" class="stage-transition" role="status" aria-live="polite" aria-atomic="true" tabindex="-1" hidden>
     <div class="stage-transition__pixels" aria-hidden="true"></div>
