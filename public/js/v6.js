@@ -211,6 +211,31 @@
       <p class="generating__line" role="status">${esc(operationDefinitions.identity.loading)} ${elapsed("identity")}</p><p class="hint">This usually takes under a minute. Your answers are safe if it fails.</p></div>
       <ul class="held-input">${answered.map(a => `<li>${tag("you")}<p>${esc(a.answer.length > 140 ? a.answer.slice(0, 140) + "…" : a.answer)}</p></li>`).join("")}</ul>`);
   }
+  // Uncertainties the model admits are confronted too. Replies are keyed by the uncertainty's text,
+  // so they survive a rebuilt profile; shared explanations become supplied answers for later stages.
+  const uncertaintyReplies = () => (sessionState.inferred.uncertaintyFeedback ||= []);
+  const replyFor = text => uncertaintyReplies().find(r => r.text === text);
+  const unknownsOf = profile => profile?.unknowns || [];
+  window.profileReviewCount = profile => profile ? profile.inferred_information.length + unknownsOf(profile).length + Math.max(1, profile.contradictions.length) : 0;
+  const baseReadableAnswers = readableAnswers;
+  window.readableAnswers = () => {
+    const answers = baseReadableAnswers();
+    uncertaintyReplies().filter(r => r.verdict !== "private" && r.explanation?.trim()).forEach((r, i) => {
+      answers.push({ id: `uncertainty_${i + 1}`, question: `The model was unsure: ${r.text}`, answer: r.explanation.trim() });
+    });
+    return answers;
+  };
+  function uncertaintyReview(text, index, total, demo) {
+    const reply = replyFor(text), editing = acknowledge === `u:${text}` ? "is-ack" : "";
+    const state = reply?.verdict === "private" ? "rejected" : reply?.verdict === "irrelevant" ? "rejected" : reply?.verdict ? "context" : "";
+    const stateTag = reply?.verdict === "private" ? tag("rejected", "KEPT PRIVATE BY YOU") : reply?.verdict === "irrelevant" ? tag("rejected", "DISMISSED BY YOU") : reply?.verdict ? tag("contested", "EXPLAINED BY YOU") : tag("uncertain");
+    const note = { private: "You chose not to tell it. The gap stays a gap, and your reply is not used anywhere.", irrelevant: "You said this does not matter for understanding you.", explained: "Your explanation now stands in for the model's guess in later stages." }[reply?.verdict];
+    const choices = [["explained", "Here's the truth"], ["irrelevant", "It doesn't matter"], ["private", "Keep it private"]].map(([value, caption]) => `<button type="button" class="choice" data-v6="review-uncertainty" data-index="${index}" data-value="${value}" aria-pressed="${reply?.verdict === value}">${caption}</button>`).join("");
+    return screen("debate", `${head("The model is not sure about this.", { meta: `Uncertainty ${index + 1} of ${total}` })}${demo ? `<p>${tag("demo")}</p>` : ""}
+      <div class="split split--debate split--tension"><section class="side side--model ${state ? `is-${state}` : ""} ${editing}">${columnLabel("THE MODEL")}${stateTag}<p class="claim">${esc(text)}</p><p class="hint">Where it lacks information, a model fills the gap with assumptions. This is one of its gaps.</p>${note ? `<p class="revision-note">${note}</p>` : ""}</section>
+      <section class="side side--you">${columnLabel("YOU")}<div class="choices" role="group" aria-label="Your answer to this uncertainty">${choices}</div>
+      <div class="inline-field"><label for="uncertaintyExplanation">What should it understand instead?</label><textarea id="uncertaintyExplanation" data-index="${index}" maxlength="600" placeholder="Explain, correct or confront it…">${esc(reply?.explanation || "")}</textarea></div></section></div>`);
+  }
   window.renderProfile = () => {
     const s = sessionState, profile = s.inferred.profile, demo = s.inferred.mode === "mock";
     if (activeOperations.has("identity")) return profileGenerating();
@@ -225,7 +250,9 @@
     const page = s.ui.profilePage, n = profile.inferred_information.length;
     if (page === 0) return profileOverview(profile, demo);
     if (page <= n) return inferenceReview(profile.inferred_information[page - 1], page, n, demo);
-    const index = page - n - 1;
+    const unknowns = unknownsOf(profile);
+    if (page <= n + unknowns.length) return uncertaintyReview(unknowns[page - n - 1], page - n - 1, unknowns.length, demo);
+    const index = page - n - unknowns.length - 1;
     if (!profile.contradictions.length) return screen("debate", `${head("No contradiction was found.", { meta: "Contradictions" })}<div class="split split--debate"><section class="side side--model">${columnLabel("THE MODEL")}<p class="claim">The answers did not give enough evidence for a clear tension, so the system has not invented one.</p><p class="hint">This does not mean your answers are perfectly consistent, only that this limited information did not show a supported conflict.</p></section><section class="side side--you">${columnLabel("YOU")}<p class="hint">Nothing to confront here. Continue when you are ready.</p>${row(baseAct("regenerate-profile", "Rebuild the profile", "btn-tertiary", busy ? "disabled" : ""), act("review-questions", "Review my answers", "btn-tertiary"))}</section></div>`);
     return contradictionReview(profile.contradictions[index], index, profile.contradictions.length, demo);
   };
@@ -237,7 +264,7 @@
       const state = verdictState(s.inferred.participantFeedback.find(f => f.id === item.id));
       return `<li class="reveal-item model-item ${state ? `is-${state}` : ""} confidence-${esc(item.confidence_label)}" style="--i:${i + 2}">${state ? tag(state) : tag("model")}<p>${esc(item.statement)}</p><p class="confidence">${esc(item.confidence_label)} confidence · a label, not a measurement</p></li>`;
     }).join("");
-    const unknowns = (profile.unknowns || []).slice(0, 3).map(u => `<li class="reveal-item uncertain-item" style="--i:${profile.inferred_information.length + 2}">${tag("uncertain")}<p>${esc(u)}</p></li>`).join("");
+    const unknowns = unknownsOf(profile).map(u => `<li class="reveal-item uncertain-item" style="--i:${profile.inferred_information.length + 2}">${replyFor(u)?.verdict === "explained" ? tag("contested", "EXPLAINED BY YOU") : replyFor(u)?.verdict ? tag("rejected", replyFor(u).verdict === "private" ? "KEPT PRIVATE BY YOU" : "DISMISSED BY YOU") : tag("uncertain")}<p>${esc(u)}</p></li>`).join("");
     const conflicts = profile.contradictions.length ? `<li class="reveal-item conflict-item" style="--i:${profile.inferred_information.length + 3}">${tag("conflict", `${profile.contradictions.length} POSSIBLE ${profile.contradictions.length === 1 ? "CONTRADICTION" : "CONTRADICTIONS"}`)}<p>Something in your answers does not quite fit. You will be asked to confront ${profile.contradictions.length === 1 ? "it" : "them"}.</p></li>` : "";
     return screen("profile", `${head("A version of you is taking shape.", { context: "This is a temporary interpretation built from limited answers, not your identity. Review each part next." })}
       ${demo ? `<p>${tag("demo")}</p>` : ""}${notice("identity", { retry: "Retry profile" })}
@@ -520,6 +547,8 @@
   };
   window.renderData = () => {
     base.renderData();
+    const replies = uncertaintyReplies();
+    if (replies.length) dataContent.insertAdjacentHTML("afterbegin", `<section class="data-section"><h3>Your answers to the model's uncertainties</h3>${replies.map((r, i) => `${source("supplied", r.verdict === "private" ? "KEPT PRIVATE" : r.verdict === "irrelevant" ? "DISMISSED" : "EXPLAINED")}<div class="data-item"><strong>${esc(r.text)}</strong><p>${esc(r.explanation || "(no explanation)")}</p>${row(act("delete-uncertainty", "Delete this item", "btn-tertiary danger", `data-index="${i}"`))}</div>`).join("")}</section>`);
     if (sessionState.supplied.cloneSample) dataContent.insertAdjacentHTML("beforeend", `<section class="data-section"><h3>Voice sample for cloning</h3>${source("supplied", "CLONING SAMPLE")}<audio controls src="${sessionState.supplied.cloneSample.url}"></audio>${row(act("delete-clone-sample", "Delete voice sample", "btn-tertiary danger"))}</section>`);
     const item = sessionState.generated.simulation;
     if (item) dataContent.insertAdjacentHTML("beforeend", `<section class="data-section"><h3>Hypothetical situation</h3>${source("invented", "HYPOTHETICAL")}<p>${core.warning}</p>${ui().simulationRevision !== revision() ? '<p class="warning">Historical: your information changed after this was generated.</p>' : ""}<div class="narrative narrative--small">${narrative(item)}</div>${ui().simulationFeedback.rating ? `${source("supplied", "YOUR REVIEW")}<p>${esc(ui().simulationFeedback.rating)}${ui().simulationFeedback.rejected ? " · rejected" : ""}${ui().simulationFeedback.explanation ? ` · ${esc(ui().simulationFeedback.explanation)}` : ""}</p>` : ""}${row(act("delete-simulation", "Delete simulation", "btn-tertiary danger"))}</section>`);
@@ -565,7 +594,12 @@
       if (s.ui.correctingInferenceId) return { label: "Keep correction and continue", enabled: true, run: () => { saveInferenceCorrection(); nextProfilePage(); } };
       const page = s.ui.profilePage, n = p.inferred_information.length, count = profileReviewCount(p);
       if (page < count) {
-        const label = page === 0 ? (n ? "Review the first interpretation" : "Continue") : page < n ? "Next interpretation" : page === n ? (p.contradictions.length ? "Confront the contradiction" + (p.contradictions.length > 1 ? "s" : "") : "Continue") : "Next contradiction";
+        const u = unknownsOf(p).length, toContradictions = p.contradictions.length ? "Confront the contradiction" + (p.contradictions.length > 1 ? "s" : "") : "Continue";
+        const label = page === 0 ? (n ? "Review the first interpretation" : u ? "Confront the uncertainties" : "Continue")
+          : page < n ? "Next interpretation"
+          : page === n ? (u ? "Confront the uncertaint" + (u > 1 ? "ies" : "y") : toContradictions)
+          : page < n + u ? "Next uncertainty"
+          : page === n + u ? toContradictions : "Next contradiction";
         return { label, enabled: !busy, run: nextProfilePage };
       }
       return { label: "Continue to Stage 4", enabled: !busy, run: () => move("continue") };
@@ -627,6 +661,7 @@
       if (old === "correct-proxy" && s.ui.correctingProxy) s.ui.correctingProxy = false;
       else s.generated.proxyResponses[0].feedback = "";
     } else if (v6 === "judge-simulation") delete ui().simulationFeedback.rating;
+    else if (v6 === "review-uncertainty") { const reply = replyFor(unknownsOf(s.inferred.profile)[Number(button.dataset.index)]); if (reply) reply.verdict = ""; }
     else if (old === "feedback-choice") { delete s.feedback[button.dataset.field]; if (button.dataset.field === "feelsLikeYou") s.ui.fictionAnswered = false; }
     status("Choice removed.");
   }
@@ -909,10 +944,20 @@
     if (id === "accessCode") { try { sessionStorage.setItem("another-me-access", event.target.value.trim()); } catch { /* kept for this page only */ } }
     if (id === "simulationExplanation") ui().simulationFeedback.explanation = event.target.value;
     if (id === "contradictionExplanation" && s.inferred.profile) {
-      const index = s.ui.profilePage - s.inferred.profile.inferred_information.length - 1, cid = contradictionId(index);
+      const index = s.ui.profilePage - s.inferred.profile.inferred_information.length - unknownsOf(s.inferred.profile).length - 1, cid = contradictionId(index);
       if (!s.inferred.contradictionFeedback.some(r => r.id === cid) && event.target.value.trim()) s.inferred.contradictionFeedback.push({ id: cid, verdict: "context-needed", explanation: event.target.value });
     }
     if (["inferenceCorrection", "proxyCorrection"].includes(id)) drafts.set(id, event.target.value);
+    if (id === "uncertaintyExplanation" && s.inferred.profile) {
+      const text = unknownsOf(s.inferred.profile)[Number(event.target.dataset.index)];
+      if (text) {
+        let reply = replyFor(text);
+        if (!reply) { reply = { text, verdict: "", explanation: "" }; uncertaintyReplies().push(reply); }
+        reply.explanation = event.target.value;
+        if (!reply.verdict && event.target.value.trim()) reply.verdict = "explained";
+        ui().simulationRevision = "";
+      }
+    }
     syncForward();
   });
   document.addEventListener("change", event => {
@@ -980,6 +1025,19 @@
     }
     if (action === "retry-media") return generateProxyMedia();
     if (action === "stop-waiting") { cancelActiveOperations("You stopped waiting. Everything that was ready is kept."); render(); return; }
+    if (action === "review-uncertainty") {
+      const text = unknownsOf(s.inferred.profile)[Number(button.dataset.index)];
+      if (!text) return;
+      let reply = replyFor(text);
+      if (!reply) { reply = { text, verdict: "", explanation: document.getElementById("uncertaintyExplanation")?.value || "" }; uncertaintyReplies().push(reply); }
+      reply.verdict = button.dataset.value; acknowledge = `u:${text}`; room.react(button.dataset.value === "explained" ? "revise" : "reject");
+      if (button.dataset.value === "explained") focusAfterRender = "uncertaintyExplanation";
+      render(); return;
+    }
+    if (action === "delete-uncertainty") {
+      sessionState.inferred.uncertaintyFeedback = uncertaintyReplies().filter((r, i) => i !== Number(button.dataset.index));
+      renderData(); render(); return;
+    }
     if (action === "judge-simulation") { u.simulationFeedback.rating = button.dataset.value; acknowledge = "simulation"; render(); return; }
     if (action === "reject-simulation") { u.simulationFeedback.rejected = !u.simulationFeedback.rejected; acknowledge = "simulation"; room.react("reject"); render(); return; }
     if (action === "delete-simulation") {

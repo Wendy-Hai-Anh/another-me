@@ -1418,7 +1418,7 @@ document.addEventListener("input", event => {
   if (event.target.id === "predictionCorrection") sessionState.predicted.comparisons = [{ rating: sessionState.predicted.comparisons[0]?.rating || "", explanation: event.target.value }];
   if (event.target.id === "contradictionExplanation") {
     const profile = sessionState.inferred.profile;
-    const index = profile ? sessionState.ui.profilePage - profile.inferred_information.length - 1 : -1;
+    const index = profile ? sessionState.ui.profilePage - profile.inferred_information.length - (profile.unknowns?.length || 0) - 1 : -1;
     if (index >= 0) {
       const id = contradictionId(index);
       const existing = sessionState.inferred.contradictionFeedback.find(item => item.id === id);
