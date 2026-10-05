@@ -1,10 +1,12 @@
 {
   "name": "another-me",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Another Me: a browser experience in which limited personal data becomes an AI double that appears to know, predict and speak for its user.",
+  "main": "server/index.cjs",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server/index.cjs",
+    "test": "node --test \"tests/*.test.cjs\"",
+    "check:references": "node tests/manual/verify-references.cjs"
   },
   "keywords": [],
   "author": "",

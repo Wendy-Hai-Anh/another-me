@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Another Me | Entering the Digital Double</title>
+  <meta name="another-me-build" content="v6-20261005-root">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Silkscreen&display=swap">
+  <link rel="stylesheet" href="/css/v6.css?v=v6-20261005-root">
+  <script src="/js/proxy-text.js?v=v6-20261005-root" defer></script>
+  <script src="/js/script.js?v=v6-20261005-root" defer></script>
+  <script src="/js/simulation-core.js?v=v6-20261005-root" defer></script>
+  <script src="/js/motion.js?v=v6-20261005-root" defer></script>
+  <script src="/js/v6.js?v=v6-20261005-root" defer></script>
+</head>
+<body>
+  <canvas id="atmo" aria-hidden="true"></canvas>
+  <div class="scrim" aria-hidden="true"></div>
+  <div class="shell" id="experienceShell" data-stage="opening">
+    <header class="topbar">
+      <div class="brand">
+        <p class="eyebrow">ANOTHER ME</p>
+        <h1 class="sr-only">Another Me</h1>
+        <p id="progressName" class="topbar-stage" aria-live="off"></p>
+        <span id="progressEmotion" hidden></span>
+        <p id="modeIndicator"></p>
+      </div>
+      <div class="topbar-end">
+        <div id="dockHome" class="dock-home"><aside id="presenceDock" class="presence-dock" aria-label="Camera presence" hidden></aside></div>
+        <p id="recordingIndicator" role="status" hidden><span class="rec-dot" aria-hidden="true"></span>Recording <output id="ambientRecordClock">00:00</output></p>
+        <details class="session-menu" id="sessionMenu">
+          <summary>Session</summary>
+          <div class="session-menu__panel" aria-label="Session controls">
+            <button type="button" data-action="view-data">See my data</button>
+            <button type="button" id="motionToggle" aria-pressed="false">Reduce motion</button>
+            <button type="button" data-action="end">End experience</button>
+            <button type="button" data-action="delete-session" class="danger">Delete session</button>
+            <small id="buildId" title="Build running in this tab">build v6-20261005-root</small>
+          </div>
+        </details>
+      </div>
+    </header>
+    <nav class="depth-rail" aria-label="Depth in the experience">
+      <ol id="progressSteps"></ol>
+    </nav>
+    <main id="stage" tabindex="-1" aria-live="off"></main>
+    <div id="claimContext" hidden></div>
+    <nav id="panelPager" hidden></nav>
+    <section id="operationStatus" class="operation-status" role="status" aria-live="polite" aria-atomic="true" hidden></section>
+    <p id="status" class="sr-only" role="status" aria-live="polite"></p>
+    <nav class="navigation" aria-label="Stage navigation">
+      <button type="button" data-action="back" class="btn-secondary">Back</button>
+      <div class="navigation__middle">
+        <button type="button" data-action="skip" class="btn-tertiary">Skip</button>
+      </div>
+      <div class="navigation__forward">
+        <p id="forwardHint" class="forward-hint" aria-live="polite"></p>
+        <button type="button" data-action="continue" class="primary" hidden aria-hidden="true" tabindex="-1">Continue</button>
+        <button type="button" data-v6="forward" id="forwardButton" class="btn-primary" aria-describedby="forwardHint">Continue</button>
+        <button type="button" data-v6="forward-alt" id="forwardAlt" class="btn-secondary" hidden></button>
+      </div>
+    </nav>
+  </div>
+  <div id="buildNotice" class="build-notice" role="status" hidden></div>
+  <dialog id="dataDialog" aria-labelledby="dataTitle">
+    <div class="dialog-head"><h2 id="dataTitle">What the system holds</h2><button type="button" data-action="close-data" class="btn-secondary">Close</button></div>
+    <div id="dataContent"></div>
+    <nav id="dataPager" hidden></nav>
+  </dialog>
+  <section id="stageTransition" class="stage-transition" role="status" aria-live="polite" aria-atomic="true" tabindex="-1" hidden>
+    <div class="stage-transition__pixels" aria-hidden="true"></div>
+    <div class="stage-marker"><p class="stage-marker__num"></p><p class="stage-marker__title"></p></div>
+  </section>
+</body>
+</html>
