@@ -71,6 +71,8 @@
 
   /* ---------- failures, kept human-readable ---------- */
   function failureKind(code = "") {
+    if (/access_code/.test(code)) return ["Access code needed", "Enter the access code on the first screen (Back to the start, or reload), then retry."];
+    if (/origin_not_allowed/.test(code)) return ["Site not allowed", "The AI server does not list this website in ALLOWED_ORIGINS."];
     if (/missing_api_key|invalid_api_key|credentials/.test(code)) return ["Service not set up", "The AI provider is missing or rejected this computer's credentials (authentication / configuration)."];
     if (/rate_limit/.test(code)) return ["Service busy", "The provider is rate limiting requests. Wait a moment and retry."];
     if (/quota|credits/.test(code)) return ["Out of credits or quota", "The provider account has reached its usage or credit limit."];
@@ -140,6 +142,7 @@
     let body;
     if (active) body = `<div class="rec-live"><span class="rec-dot" aria-hidden="true"></span><output id="recordClock" aria-label="Recording time">00:00</output><span class="rec-limit">/ 01:00</span><canvas class="rec-wave" id="recWave" width="240" height="40" aria-hidden="true"></canvas></div>${row(baseAct("stop-recording", "Stop recording", "btn-primary"))}`;
     else if (audio) body = `<audio controls preload="metadata" src="${audio.url}" aria-label="Your recording"></audio>${row(baseAct("start-recording", "Record again", "btn-secondary", busy ? "disabled" : ""), baseAct("delete-audio", "Delete recording", "btn-tertiary danger"))}`;
+    else if (appConfig.serverless) body = `<p class="notice notice--info">This online version is a demonstration without the AI server, so spoken answers can't be transcribed. Please type your answer.</p>`;
     else body = `<button type="button" class="rec-button" data-action="start-recording" ${busy ? "disabled" : ""}><span class="rec-button__icon" aria-hidden="true"></span><span>Record your answer</span></button><p class="hint">Up to a minute. When you stop, the recording is sent to OpenAI and turned into words you can edit.</p>`;
     return `<section class="ws-voice" aria-label="Speak your answer"><p class="ws-label">SPEAK <span class="rec-state" data-state="${state}">${word}</span></p>${body}${deviceNotice("microphone")}</section>`;
   }
@@ -163,6 +166,8 @@
     <h2 class="opening__title opening__title--split"><span>How much of you</span> <span>can a system make?</span></h2>
     <p class="opening__lede">Give it an image, your voice and a few answers. It will build an interpretation of you, and then speak as you.</p>
     <p class="opening__note">What it builds is a model, not you. You can correct it, reject it or delete everything at any time.</p>
+    ${appConfig.serverless ? '<p class="opening__note">Online demonstration: the AI text is simulated and nothing you enter leaves this browser. The full version with live AI, voice and the talking double runs with the project server.</p>' : ""}
+    ${capabilities?.accessCode && !mockMode ? `<div class="field access-field"><label for="accessCode">Access code for the live AI (from the researcher)</label><input id="accessCode" type="password" autocomplete="off" value="${esc(storedAccessCode())}"></div>` : ""}
     ${row(act("begin", "Enter", "btn-primary btn-large"))}
     <div class="opening__more"><details><summary>What happens to my information?</summary><p>Your session lives only in this browser's memory, not a database. What you supply, what the AI infers and what it generates are always labelled separately. External AI services (OpenAI, ElevenLabs, D-ID) are used only after you allow each one, and their own retention policies apply.</p></details>
     <details><summary>How long does it take?</summary><p>About 10–15 minutes, in six stages that go progressively deeper. You can skip, go back or leave whenever you like.</p></details></div></div>`);
@@ -898,8 +903,10 @@
   }, 1000);
 
   /* ---------- events ---------- */
+  function storedAccessCode() { try { return sessionStorage.getItem("another-me-access") || ""; } catch { return ""; } }
   document.addEventListener("input", event => {
     const s = sessionState, id = event.target.id;
+    if (id === "accessCode") { try { sessionStorage.setItem("another-me-access", event.target.value.trim()); } catch { /* kept for this page only */ } }
     if (id === "simulationExplanation") ui().simulationFeedback.explanation = event.target.value;
     if (id === "contradictionExplanation" && s.inferred.profile) {
       const index = s.ui.profilePage - s.inferred.profile.inferred_information.length - 1, cid = contradictionId(index);
@@ -988,13 +995,14 @@
   let resizeTimer = 0;
   addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (!transitioning) render(); }, 150); });
   addEventListener("pagehide", () => { cancelTransition(); room.dispose(); });
-  fetch("/api/capabilities").then(r => r.ok ? r.json() : null).then(value => { capabilities = value; render(); }).catch(() => {});
+  if (appConfig.serverless) capabilities = { openai: false, elevenlabs: false, did: false, accessCode: false, demo: true };
+  else fetch(apiUrl("/api/capabilities"), { headers: apiHeaders() }).then(r => r.ok ? r.json() : null).then(value => { capabilities = value; render(); }).catch(() => {});
 
   /* ---------- stale-build protection: an old tab says so instead of silently lagging ---------- */
   const buildNotice = document.getElementById("buildNotice");
   async function checkBuild() {
     try {
-      const html = await (await fetch("/", { cache: "no-store" })).text();
+      const html = await (await fetch(location.pathname, { cache: "no-store" })).text();
       const latest = html.match(/name="another-me-build" content="([^"]+)"/)?.[1];
       if (!latest || latest === BUILD || buildNotice.dataset.latest === latest) return;
       buildNotice.dataset.latest = latest;

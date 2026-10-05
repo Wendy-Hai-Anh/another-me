@@ -5,8 +5,9 @@
   "main": "server/index.cjs",
   "scripts": {
     "start": "node server/index.cjs",
-    "test": "node --test \"tests/*.test.cjs\"",
-    "check:references": "node tests/manual/verify-references.cjs"
+    "test": "node --test --test-concurrency=1 \"tests/*.test.cjs\"",
+    "check:references": "node tests/manual/verify-references.cjs",
+    "site": "node -e \"const fs=require('fs');fs.rmSync('_site',{recursive:true,force:true});fs.cpSync('public','_site',{recursive:true});for(const f of fs.readdirSync('shared'))fs.copyFileSync('shared/'+f,'_site/js/'+f)\""
   },
   "keywords": [],
   "author": "",
@@ -16,5 +17,8 @@
     "@elevenlabs/elevenlabs-js": "^2.64.0",
     "dotenv": "^17.4.2",
     "openai": "^7.5.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

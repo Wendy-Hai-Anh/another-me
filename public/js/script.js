@@ -41,7 +41,15 @@ const operationDefinitions = {
 };
 const operationStateNames = new Set(["idle", "loading", "success", "timeout", "error", "fallback"]);
 const query = new URLSearchParams(location.search);
-const mockMode = query.get("mode") === "mock";
+const appConfig = window.ANOTHER_ME_CONFIG || { apiBase: "", serverless: false };
+// Demonstration mode: asked for with ?mode=mock, or automatic on a static host with no AI server.
+const mockMode = query.get("mode") === "mock" || !!appConfig.serverless;
+const apiUrl = path => `${appConfig.apiBase || ""}${path}`;
+function apiHeaders(extra = {}) {
+  let code = "";
+  try { code = sessionStorage.getItem("another-me-access") || ""; } catch { /* storage blocked: no code */ }
+  return code ? { ...extra, "X-Access-Code": code } : extra;
+}
 const forcedFailure = query.get("fail") || "";
 const developerMode = ["localhost", "127.0.0.1", ""].includes(location.hostname || "") && query.get("dev") === "1";
 const developerScenarios = new Map();
@@ -744,9 +752,9 @@ function responseFailure(response, message = "The service request failed.", diag
 async function callApi(path, payload, format = "json", signal) {
   let response;
   try {
-    response = await fetch(path, {
+    response = await fetch(apiUrl(path), {
       method: "POST", cache: "no-store", signal,
-      headers: { "Content-Type": format === "audio" ? payload.type : "application/json" },
+      headers: apiHeaders({ "Content-Type": format === "audio" ? payload.type : "application/json" }),
       body: format === "audio" ? payload : JSON.stringify(payload)
     });
   } catch (error) {
@@ -764,9 +772,9 @@ async function callApi(path, payload, format = "json", signal) {
 async function callBinaryApi(path, payload, contentType, signal) {
   let response;
   try {
-    response = await fetch(path, {
+    response = await fetch(apiUrl(path), {
       method: "POST", cache: "no-store", signal,
-      headers: { "Content-Type": contentType }, body: payload
+      headers: apiHeaders({ "Content-Type": contentType }), body: payload
     });
   } catch (error) {
     if (signal?.aborted) throw error;

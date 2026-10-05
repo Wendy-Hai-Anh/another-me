@@ -3,3 +3,8 @@
 node_modules/
 output.mp3
 tests/browser/artifacts/
+
+# Personal recordings and portraits: kept locally, never published
+archive/media-samples/
+# Local copy of the published site (npm run site)
+_site/

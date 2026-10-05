@@ -1,0 +1,21 @@
+# Render blueprint for the live AI server (Dashboard -> New -> Blueprint -> this repository).
+# Secret values are entered in the Render dashboard, never committed.
+services:
+  - type: web
+    name: another-me-api
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/capabilities
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: DID_API_KEY
+        sync: false
+      - key: ACCESS_CODE
+        sync: false
+      - key: ALLOWED_ORIGINS
+        value: https://wendy-hai-anh.github.io

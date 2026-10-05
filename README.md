@@ -4,14 +4,17 @@ Another Me is a browser-based experience exploring how limited data can become a
 
 This is the v6 prototype ("Entering the Digital Double"), now the main project. Earlier prototypes and experiments are kept in `archive/`.
 
+**Published site:** https://wendy-hai-anh.github.io/another-me/ (GitHub Pages). Without its AI server it runs as a labelled demonstration; see [docs/DEPLOY.md](docs/DEPLOY.md) to connect the live AI and for the privacy clean-up of old media.
+
 ## Project Layout
 
 ```text
 another-me/
 ├─ public/              what the browser loads
-│  ├─ index.html        page shell and build id
+│  ├─ index.html        page shell and build id (asset paths are relative, so it works under /another-me/)
 │  ├─ css/v6.css        design system: themes per stage, labels, layouts
 │  └─ js/
+│     ├─ config.js      where the AI server is (the one line to edit when publishing)
 │     ├─ script.js      session state, devices, provider calls (the engine)
 │     ├─ v6.js          every screen, navigation, passages, notices (the interface)
 │     └─ motion.js      the tunnel atmosphere (canvas)
@@ -22,8 +25,10 @@ another-me/
 ├─ tests/               unit tests (npm test)
 │  ├─ browser/          Playwright scripts (written for the earlier UI; see below)
 │  └─ manual/           live simulation check, reference checksum check
-├─ docs/                storyboard, test report, reference checksums, original repo README
+├─ docs/                DEPLOY.md (publishing + privacy), storyboard, test report, reference checksums
 ├─ archive/             earlier prototypes, experiments and media samples (see archive/README.md)
+├─ .github/workflows/  pages.yml: publishes public/ + shared/ to GitHub Pages on every push to main
+├─ render.yaml          blueprint for hosting the AI server on Render
 ├─ .env.local           your API keys (never committed, never served)
 └─ .env.example         names of the settings the server reads
 ```
@@ -42,7 +47,7 @@ npm start
 
 Use localhost in Chrome or Edge, not a file URL or static Live Server: API requests require this Node backend. If port 4187 is occupied, set `INTEGRATION_PORT` in this terminal before starting. Keep the terminal open. Only the files listed in `server/index.cjs` are served (`/`, `/css/*`, `/js/*`); `.env.local`, the server code and the archive are never reachable from the browser.
 
-The server reads environment variables, then `.env.local` in the project root. Restart the server after changing configuration. `.env.example` contains names only:
+The server reads environment variables, then `.env.local` in the project root. Hosting settings (`ACCESS_CODE`, `ALLOWED_ORIGINS`, request limits, `PORT`) are described in [docs/DEPLOY.md](docs/DEPLOY.md). Restart the server after changing configuration. `.env.example` contains names only:
 
 ```text
 OPENAI_API_KEY
@@ -154,7 +159,8 @@ The inherited developer helper `__anotherMeDev` supports permission denial, slow
 ## Tests
 
 ```powershell
-npm test                    # every unit test, each file in its own process
+npm test                    # every unit test, one file at a time
+npm run site                # build the GitHub Pages folder into _site/ to preview it
 npm run check:references    # archive and D:\files are still byte-identical to docs/reference-baseline.json
 ```
 

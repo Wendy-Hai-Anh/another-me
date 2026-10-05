@@ -626,3 +626,8 @@ body[data-depth="6"] .scrim,body[data-depth="ending"] .scrim,body[data-depth="pa
 /* During a stage passage the overlay steps back so the tunnel carries the moment. */
 .scrim{transition:background 1.2s var(--ease),opacity .45s var(--ease)}
 body.is-passing .scrim{opacity:.18}
+
+/* ---------- published site: access code for the live AI ---------- */
+.access-field{max-width:360px;text-align:left}
+.access-field input{width:100%;min-height:44px;padding:10px 14px;border-radius:10px;border:1px solid rgb(var(--fg-rgb) / .22);background:var(--field);color:var(--fg);font:16px/1.4 var(--sans)}
+.access-field input:focus{border-color:var(--accent)}

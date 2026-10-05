@@ -11,14 +11,56 @@ const { createSimulation } = require("./simulation-service.cjs");
 const { validateParticipantAnswers } = require("./schemas.cjs");
 const { safeError, diagnosticCode } = require("./safe-errors.cjs");
 
-const host = "127.0.0.1";
-const port = Number(process.env.INTEGRATION_PORT ?? 4187);
+// Locally: 127.0.0.1:4187. On a host that sets PORT (Render, Railway, Fly), listen on all interfaces.
+const port = Number(process.env.PORT ?? process.env.INTEGRATION_PORT ?? 4187);
+const host = process.env.HOST || (process.env.PORT ? "0.0.0.0" : "127.0.0.1");
+// The published site (e.g. https://<user>.github.io) may call this server; nothing else may.
+const allowedOrigins = new Set((process.env.ALLOWED_ORIGINS || "").split(",").map(value => value.trim().replace(/\/$/, "")).filter(Boolean));
+const accessCode = process.env.ACCESS_CODE || "";
+// Paid providers sit behind these routes, so every visitor gets a budget.
+const limits = {
+  requests: { max: Number(process.env.REQUESTS_PER_10_MIN || 40), windowMs: 10 * 60_000, routes: null },
+  media: { max: Number(process.env.MEDIA_PER_HOUR || 4), windowMs: 60 * 60_000, routes: new Set(["/api/cloned-speech", "/api/talking-avatar"]) },
+  mediaDaily: { max: Number(process.env.MEDIA_PER_DAY || 40), windowMs: 24 * 60 * 60_000, routes: new Set(["/api/cloned-speech", "/api/talking-avatar"]), global: true }
+};
+const hits = new Map();
+function overLimit(ip, pathname) {
+  const now = Date.now();
+  for (const [name, rule] of Object.entries(limits)) {
+    if (rule.routes && !rule.routes.has(pathname)) continue;
+    const key = rule.global ? name : `${name}:${ip}`;
+    const recent = (hits.get(key) || []).filter(time => now - time < rule.windowMs);
+    if (recent.length >= rule.max) { hits.set(key, recent); return true; }
+    recent.push(now); hits.set(key, recent);
+  }
+  return false;
+}
+function originAllowed(origin, request) {
+  if (!origin) return true;
+  let parsed; try { parsed = new URL(origin); } catch { return false; }
+  // Same server (the page it serves itself), local development, or an explicitly listed site.
+  return parsed.host === request.headers.host || ["127.0.0.1", "localhost"].includes(parsed.hostname) && !process.env.PORT || allowedOrigins.has(parsed.origin);
+}
+function corsHeaders(request, response) {
+  const origin = request.headers.origin;
+  if (!origin || !originAllowed(origin, request)) return;
+  response.setHeader("Access-Control-Allow-Origin", origin);
+  response.setHeader("Vary", "Origin");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Access-Code");
+  response.setHeader("Access-Control-Max-Age", "600");
+}
+function codeMatches(given) {
+  const a = Buffer.from(String(given || "")), b = Buffer.from(accessCode);
+  return a.length === b.length && require("node:crypto").timingSafeEqual(a, b);
+}
 // Only these files are ever served: the page from public/, and the two modules shared with the server.
 const html = "text/html; charset=utf-8", css = "text/css; charset=utf-8", js = "text/javascript; charset=utf-8";
 const assets = new Map([
   ["/", ["public/index.html", html]],
   ["/index.html", ["public/index.html", html]],
   ["/css/v6.css", ["public/css/v6.css", css]],
+  ["/js/config.js", ["public/js/config.js", js]],
   ["/js/script.js", ["public/js/script.js", js]],
   ["/js/v6.js", ["public/js/v6.js", js]],
   ["/js/motion.js", ["public/js/motion.js", js]],
@@ -64,6 +106,10 @@ function requireAnswers(answers) {
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${host}:${port}`);
+    corsHeaders(request, response);
+    if (request.method === "OPTIONS" && url.pathname.startsWith("/api/")) {
+      response.writeHead(originAllowed(request.headers.origin, request) ? 204 : 403).end(); return;
+    }
     if (["GET", "HEAD"].includes(request.method) && assets.has(url.pathname)) {
       const [name, type] = assets.get(url.pathname);
       const file = await fs.readFile(path.join(root, name));
@@ -73,12 +119,16 @@ const server = http.createServer(async (request, response) => {
       json(response, 200, {
         openai: Boolean(process.env.OPENAI_API_KEY),
         elevenlabs: Boolean(process.env.ELEVENLABS_API_KEY),
-        did: Boolean(process.env.DID_API_KEY)
+        did: Boolean(process.env.DID_API_KEY),
+        accessCode: Boolean(accessCode)
       }); return;
     }
     if (request.method === "GET" && url.pathname === "/favicon.ico") { response.writeHead(204).end(); return; }
     if (request.method !== "POST" || !["/api/transcribe","/api/profile","/api/predict","/api/proxy","/api/fiction","/api/simulation","/api/cloned-speech","/api/talking-avatar"].includes(url.pathname)) { json(response, 404, { error: "Not found." }); return; }
-    if (request.headers.origin && request.headers.origin !== `http://${host}:${port}`) { json(response, 403, { error: "Cross-origin requests are not allowed." }); return; }
+    if (!originAllowed(request.headers.origin, request)) { json(response, 403, { error: "This site is not allowed to use the server.", code: "origin_not_allowed" }); return; }
+    if (accessCode && !codeMatches(request.headers["x-access-code"])) { json(response, 401, { error: "An access code is needed to use the live AI. Ask the researcher for it.", code: "access_code_required" }); return; }
+    const ip = String(request.headers["x-forwarded-for"] || "").split(",")[0].trim() || request.socket.remoteAddress || "unknown";
+    if (overLimit(ip, url.pathname)) { json(response, 429, { error: "Too many requests from this device. Wait a few minutes, then try again.", code: "rate_limit" }); return; }
     if (url.pathname === "/api/transcribe") {
       const type = (request.headers["content-type"] || "").split(";", 1)[0].toLowerCase();
       if (!adapter.audioNames.has(type)) { json(response, 415, { error: "Unsupported audio format." }); return; }
@@ -159,7 +209,7 @@ const server = http.createServer(async (request, response) => {
   }
 });
 if (require.main === module) {
-  server.listen(port, host, () => console.log(`Integration prototype: http://${host}:${port}/`));
+  server.listen(port, host, () => console.log(`Another Me server: http://${host}:${port}/${allowedOrigins.size ? ` (also serving ${[...allowedOrigins].join(", ")})` : ""}${accessCode ? " · access code on" : ""}`));
   process.on("SIGINT", () => server.close(() => process.exit(0)));
 }
 module.exports = server;
