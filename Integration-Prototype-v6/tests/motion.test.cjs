@@ -22,17 +22,10 @@ function harness() {
   const target = { addEventListener(type, callback) { targetListeners.set(type, callback); } };
   return { room, target, targetListeners, listeners, callbacks, doc };
 }
-test("tunnel supports reversible touch and ignores browser zoom gestures", () => {
-  const h = harness(); let prevented = false;
-  h.room.enter(h.target, () => {});
-  const target = { closest: () => null };
-  h.targetListeners.get("touchstart")({ touches: [{ clientY: 600 }], target });
-  h.targetListeners.get("touchmove")({ touches: [{ clientY: 400 }], preventDefault() { prevented = true; } });
-  assert(prevented); assert.equal(h.room.targetDepth, .11);
-  h.targetListeners.get("touchmove")({ touches: [{ clientY: 600 }], preventDefault() {} });
-  assert.equal(h.room.targetDepth, 0);
-  h.targetListeners.get("wheel")({ ctrlKey: true, target, deltaY: 1000, preventDefault() { throw new Error("Must not capture zoom"); } });
-  assert.equal(h.room.targetDepth, 0);
+test("the atmosphere installs no scroll, wheel or touch handlers; progression is never gesture-driven", () => {
+  const h = harness();
+  assert.equal(h.listeners.has("wheel"), false); assert.equal(h.listeners.has("touchmove"), false);
+  assert.equal(typeof h.room.enter, "undefined");
   h.room.dispose();
 });
 test("hidden tab pauses the only animation loop; reduced motion remains static", () => {
@@ -43,13 +36,11 @@ test("hidden tab pauses the only animation loop; reduced motion remains static",
   h.room.setScene(5); assert.equal(h.callbacks.size, 0);
   h.room.dispose();
 });
-test("leaving or deleting entrance aborts gesture handlers and resets state", () => {
-  const h = harness(); h.room.enter(h.target, () => {});
-  const signal = h.room.inputAbort.signal;
-  h.room.targetDepth = .6; h.room.pathVisible = true;
+test("reset clears depth state, the revealed path and any passage", () => {
+  const h = harness();
+  h.room.react("reveal"); h.room.travel(1);
   h.room.reset();
-  assert.equal(signal.aborted, true);
-  assert.equal(h.room.tunnel, false); assert.equal(h.room.targetDepth, 0); assert.equal(h.room.pathVisible, false);
+  assert.equal(h.room.pathVisible, false); assert.equal(h.room.journey, null); assert.equal(h.room.stage, 0);
   h.room.dispose();
 });
 
@@ -69,18 +60,16 @@ test("directional passage uses one loop, no gesture handlers, and cancels safely
   h.room.dispose();
 });
 
-test("full depth completes once and detaches entrance; rejecting a path fades its opacity", () => {
-  const h = harness(); let completed = 0;
-  h.room.enter(h.target, () => completed++);
-  const signal = h.room.inputAbort.signal;
-  h.room.targetDepth = 1;
+test("stage profiles deepen gradually and rejecting a path fades its opacity", () => {
+  const h = harness();
   const tick = time => { h.callbacks.delete(h.room.frameId); h.room.frame(time); };
-  for (let time = 32; time < 2000; time += 32) tick(time);
-  assert.equal(completed, 1); assert.equal(signal.aborted, true);
-  h.room.react("reveal"); tick(2048); tick(2080);
+  h.room.setScene(6);
+  for (let time = 32; time < 4000; time += 32) tick(time);
+  assert(h.room.look.hex > .9 && h.room.look.ring > .3);
+  h.room.react("reveal"); tick(4032); tick(4064);
   const before = h.room.pathOpacity;
   assert(before > 0);
-  h.room.react("reject"); tick(2112);
+  h.room.react("reject"); tick(4096);
   assert(h.room.pathOpacity > 0 && h.room.pathOpacity < before);
   h.room.dispose();
 });

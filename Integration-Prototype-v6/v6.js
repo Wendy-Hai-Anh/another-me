@@ -1,255 +1,104 @@
 "use strict";
 
-// The copied integration owns devices and providers. This controller owns the v6 journey UI.
+// Another Me v6: the "descent" interface layer.
+// script.js owns state, devices and providers. This layer owns screens, navigation and motion.
+// Rule: one screen is one meaningful interaction. Nothing here paginates arbitrary DOM blocks.
 (() => {
+  const BUILD = document.querySelector('meta[name="another-me-build"]')?.content || "dev";
   const core = window.SimulationCore;
   const room = new DigitalRoom(document.getElementById("atmo"));
-  const base = { render, move, renderData, renderDevelopmentStatus, renderProfile, dataItem, status, renderOperationStatus, generateProxyMedia, capturePortrait, deleteSession, useOperationFallback, retryOperation, skipOperation, invalidateAnalysis, clearMedia, updateRecordClock, setRecording, proxySpeechText };
+  const base = { render, move, renderData, status, generateProxyMedia, capturePortrait, deleteSession, useOperationFallback, skipOperation, invalidateAnalysis, clearMedia, updateRecordClock, setRecording, proxySpeechText };
   const shell = document.getElementById("experienceShell");
-  const pager = document.getElementById("panelPager");
-  const reader = document.getElementById("readerDialog");
-  const pageMemory = new Map();
+  const forwardButton = document.getElementById("forwardButton");
+  const forwardHint = document.getElementById("forwardHint");
+  const forwardAlt = document.getElementById("forwardAlt");
+  const backButton = document.querySelector('.navigation [data-action="back"]');
+  const skipButton = document.querySelector('.navigation [data-action="skip"]');
+  const marker = document.getElementById("stageTransition");
+  const dockHome = document.getElementById("dockHome");
+  const esc = escapeHtml;
+  const pad = n => String(n).padStart(2, "0");
   const drafts = new Map();
-  let pages = [], currentPage = 0, pageKey = "", renderTick = 0, transitionTicket = 0, transitioning = false;
-  let capabilities = null;
-  let continueAllowed = false, continueCaption = "Continue";
-  let forwardSource = null, stagePages = null;
-  const forwardActions = document.createElement("div"); forwardActions.hidden = true; shell.append(forwardActions);
-  let focusAfterRender = "";
   const revealedPrompts = new Set();
+  let capabilities = null;
+  let transitionTicket = 0, transitioning = false;
+  let lastScreenKey = "", focusAfterRender = "", acknowledge = "", waveFrame = 0;
+
+  console.info(`[another-me] build ${BUILD}`);
   labels.unknown = ["?", "UNKNOWN"];
-  operationDefinitions.fiction = { label: "Behavioral simulation", stages: [6], timeoutMs: 150000, loading: "Imagining a possible decision...", success: "Your hypothetical situation is ready.", fallback: "Live simulation is unavailable. Try again, use a labelled demonstration, or skip." };
+  operationDefinitions.fiction = { label: "Hypothetical situation", stages: [6], timeoutMs: 150000, loading: "Generating a possible scenario…", success: "Your hypothetical situation is ready.", fallback: "Live simulation is unavailable. Try again, use a labelled demonstration, or skip." };
   operationDefinitions.microphone.stages = [2, 3, 4, 5];
   operationDefinitions.identity.timeoutMs = 95000;
+  operationDefinitions.identity.loading = "Constructing an identity model from your answers…";
+  operationDefinitions.prediction.loading = "Predicting what you will choose…";
+  operationDefinitions.proxy.loading = "Generating a response from your digital double…";
+  operationDefinitions.elevenlabs.loading = "Preparing your cloned voice…";
+  operationDefinitions.did.loading = "Creating the talking double… D-ID can queue for several minutes.";
   stages[5][2] = "Explore a situation you never described.";
-  function state() {
-    return sessionState.ui.v6 ||= { entry: "title", checkpoint: false, consentPage: 0, simulationStep: "consent", simulationRevision: "", simulationMode: "", simulationFeedback: {}, seenScenarios: [], portraitConfirmed: false };
+
+  function ui() {
+    return sessionState.ui.v6 ||= { checkpoint: false, consentPage: 0, simulationStep: "consent", simulationRevision: "", simulationMode: "", simulationFeedback: {}, seenScenarios: [], portraitConfirmed: false, proxyView: "response" };
   }
-  function act(action, text, primary = false) { return `<button type="button" data-v6="${action}" class="${primary ? "primary" : ""}">${text}</button>`; }
-  const controls = (...items) => `<div class="controls">${items.join("")}</div>`;
-  const text = escapeHtml;
-  window.proxySpeechText = value => base.proxySpeechText(ProxyText.forSpeech(value));
-  function syncForward() {
-    const next = document.querySelector('.navigation [data-action="continue"]');
-    if (!next) return;
-    const reading = currentPage < pages.length - 1;
-    next.textContent = reading ? "Continue reading" : forwardSource?.textContent || continueCaption;
-    next.dataset.forwardAction = reading ? "read-next" : forwardSource?.dataset.action || forwardSource?.dataset.v6 || "continue";
-    next.disabled = transitioning || !!recorder || (reading ? false : forwardSource ? forwardSource.disabled || busy : !continueAllowed);
-  }
-  function prepareForward() {
-    forwardSource = null; forwardActions.replaceChildren();
-    const checkpoint = state().checkpoint && sessionState.currentStage === 5;
-    document.getElementById("footerTextOnly").hidden = !checkpoint;
-    const skip = document.querySelector('.navigation [data-action="skip"]');
-    skip.textContent = checkpoint ? "Skip Stage 5" : "Skip";
-    skip.classList.toggle("checkpoint-skip", checkpoint);
-    if (!sessionState.started || sessionState.ended || sessionState.finished) return;
-    const stage = sessionState.currentStage;
-    const localAction = checkpoint ? [state().consentPage < 2 ? "consent-next" : "consent-finish", state().consentPage < 2 ? "Next permission" : "Enter Stage 5"]
-      : stage === 5 && sessionState.generated.proxyResponses.length && state().proxyView !== "review" ? ["proxy-review", "Review response"]
-      : stage === 6 && sessionState.generated.simulation && state().simulationStep === "scene" ? ["simulation-review", "Review this situation"]
-      : stage === 6 && sessionState.generated.simulation && state().simulationStep === "review" ? ["simulation-reflect", "Final reflection"] : null;
-    if (localAction) {
-      forwardActions.innerHTML = act(...localAction); forwardSource = forwardActions.firstElementChild;
-      return;
-    }
-    let action = "";
-    if (stage === 3) {
-      if (sessionState.questionIndex < questions.length) {
-        action = "next-question";
-        if (!stageElement.querySelector('[data-action="next-question"]')) {
-          const a = sessionState.supplied.answers[sessionState.questionIndex];
-          stageElement.insertAdjacentHTML("beforeend", buttons([[action, sessionState.questionIndex === 2 ? "Build my profile" : "Next question", "", busy || !a.text.trim()]]));
-        }
-      } else action = sessionState.ui.correctingInferenceId ? "save-inference-correction" : sessionState.inferred.profile
-        ? sessionState.ui.profilePage < profileReviewCount(sessionState.inferred.profile) ? "next-profile-item" : "profile-move-on" : "regenerate-profile";
-    }
-    if (stage === 4) action = !sessionState.predictionShown ? "predict" : !sessionState.ui.predictionCompared ? "compare-prediction" : "";
-    if (action) {
-      forwardSource = stageElement.querySelector(`[data-action="${action}"]`);
-      if (!forwardSource && stage === 4 && action === "compare-prediction") {
-        forwardSource = document.createElement("button"); forwardSource.dataset.action = action;
-        forwardSource.textContent = "Compare our answers"; forwardSource.disabled = true;
-      }
-      if (forwardSource) { forwardSource.hidden = true; forwardActions.append(forwardSource); }
-    }
-    stageElement.querySelectorAll('[data-action="previous-profile-item"]').forEach(el => el.remove());
-    stageElement.querySelectorAll(".controls").forEach(el => { if (!el.children.length) el.remove(); });
-  }
-  function taskHeader(caption, stage = 3) {
-    return `<header class="task-header"><div><p class="stage-title">${text(stages[stage - 1][0])}</p><p class="question-count">${caption}</p></div>${stage < 6 ? '<div id="taskCameraSlot"></div>' : ""}</header>`;
-  }
-  window.renderQuestions = () => {
-    if (sessionState.questionIndex >= questions.length) return renderProfile();
-    const a = sessionState.supplied.answers[sessionState.questionIndex], mode = sessionState.ui.inputMode[a.id];
-    const editing = mode === "type" || !!a.text || !!a.audio;
-    return `<section class="single-panel question-panel ${a.audio && !a.text ? "needs-transcript" : ""}">${taskHeader(`QUESTION ${sessionState.questionIndex + 1} / ${questions.length}`)}${spokenPrompt(`question-${sessionState.questionIndex + 1}`, a.question)}
-      ${!mode && !a.audio && !a.text ? inputChoice(a.id) : ""}
-      <div class="response-workspace ${a.audio ? "with-recording" : ""}">
-        ${mode === "speak" || a.audio ? `<div class="response-audio">${renderRecordingControls(a.id, a.audio)}
-          ${a.audio && !sessionState.consent.transcription ? buttons([["allow-transcription", "Send audio to OpenAI to transcribe", "", busy]]) : ""}
-          ${a.audio && sessionState.consent.transcription && !a.text ? buttons([["transcribe", "Retry transcription", "", busy]]) : ""}</div>` : ""}
-        ${editing ? `<div class="response-text">${source(a.textOrigin === "transcribed" ? "transcribed" : "supplied", "YOUR ANSWER")}<label class="sr-only" for="questionText">Read and edit your answer</label><textarea id="questionText" maxlength="4000" ${activeOperations.has("transcription") ? "readonly" : ""} placeholder="Your answer, in your own words...">${text(a.text)}</textarea></div>` : ""}
-      </div>${mode && !a.audio ? `<button class="text-link" type="button" data-action="switch-input" data-target="${a.id}" data-mode="${mode === "type" ? "speak" : "type"}">${mode === "type" ? "Speak instead" : "Type instead"}</button>` : ""}</section>`;
+  const atCheckpoint = () => ui().checkpoint && sessionState.currentStage === 5;
+
+  /* ---------- small markup helpers ---------- */
+  const act = (action, label, cls = "btn-secondary", extra = "") => `<button type="button" data-v6="${action}" class="${cls}" ${extra}>${label}</button>`;
+  const baseAct = (action, label, cls = "btn-secondary", extra = "") => `<button type="button" data-action="${action}" class="${cls}" ${extra}>${label}</button>`;
+  const row = (...items) => `<div class="row">${items.filter(Boolean).join("")}</div>`;
+  const TAGS = {
+    you: ["■", "YOU SAID"], heard: ["≈", "TRANSCRIBED FROM YOUR VOICE"], model: ["◇", "MODEL INFERENCE"], predicted: ["◇", "MODEL PREDICTION"],
+    uncertain: ["◌", "UNCERTAIN"], conflict: ["⟂", "POSSIBLE CONTRADICTION"], generated: ["✱", "GENERATED"], double: ["✱", "GENERATED · AI DOUBLE"],
+    contested: ["✎", "CONTESTED BY YOU"], rejected: ["⊘", "REJECTED BY YOU"], confirmed: ["✓", "CONFIRMED BY YOU"], demo: ["◍", "LABELLED DEMONSTRATION"]
   };
-  window.renderContradiction = (item, index) => {
-    const id = contradictionId(index), review = sessionState.inferred.contradictionFeedback.find(row => row.id === id);
-    return `<article class="debate-grid"><div class="debate-claim">${source("inferred", sessionState.inferred.mode === "mock" ? "MOCK CONTRADICTION" : "POSSIBLE CONTRADICTION")}<h3>Here is the tension I see.</h3><p class="contradiction-description">${text(item.description)}</p><details><summary>What is this based on?</summary><p>${text(item.possible_explanation || "This interpretation may be wrong.")}</p>${item.evidence_ids.map(id => { const a = readableAnswers().find(a => a.id === id); return a ? `${source("supplied")}<p>${text(a.question)}</p><p>${text(a.answer)}</p>` : ""; }).join("")}</details></div>
-      <div class="debate-reply"><label for="contradictionExplanation">${source("supplied", "YOUR PERSPECTIVE")}<span>What am I missing?</span></label><textarea id="contradictionExplanation" placeholder="Explain, disagree, or add context...">${text(review?.explanation || "")}</textarea><div class="controls review-controls">${[["accurate", "Accurate"], ["context-needed", "Add context"], ["not-a-contradiction", "Not a conflict"]].map(([value, caption]) => `<button type="button" data-action="review-contradiction" data-id="${id}" data-verdict="${value}" aria-label="${value === "not-a-contradiction" ? "This is not a contradiction" : caption}" aria-pressed="${review?.verdict === value}">${caption}</button>`).join("")}</div></div></article>`;
-  };
-  window.renderProfile = () => {
-    const profile = sessionState.inferred.profile;
-    const index = profile ? sessionState.ui.profilePage - profile.inferred_information.length - 1 : -1;
-    if (!profile?.contradictions[index]) {
-      const page = sessionState.ui.profilePage, inference = profile?.inferred_information[page - 1];
-      if (!inference) return `<section class="single-panel profile-panel">${base.renderProfile()}</section>`;
-      const feedback = sessionState.inferred.participantFeedback.find(row => row.id === inference.id);
-      const editing = sessionState.ui.correctingInferenceId === inference.id;
-      return `<section class="single-panel debate-panel">${taskHeader(`INTERPRETATION ${page} / ${profile.inferred_information.length}`)}<article class="debate-grid"><div class="debate-claim">${source("inferred", sessionState.inferred.mode === "mock" ? "MOCK INTERPRETATION" : "INTERPRETATION")}<p class="contradiction-description">${text(inference.statement)}</p><details><summary>What is this based on?</summary><p>${text(inference.uncertainty_reason)} Confidence: ${text(inference.confidence_label)}.</p>${inference.evidence_ids.map(id => { const a = readableAnswers().find(a => a.id === id); return a ? `${source("supplied")}<p>${text(a.answer)}</p>` : ""; }).join("")}</details></div><div class="debate-reply">${source("supplied", "YOUR PERSPECTIVE")}<h3>Does this sound like you?</h3>${editing ? `<label for="inferenceCorrection">What did it miss?</label><textarea id="inferenceCorrection">${text(feedback?.correction || "")}</textarea>${buttons([["save-inference-correction", "Keep my correction", "primary"], ["cancel-inference-correction", "Cancel"]])}` : `<div class="controls review-controls">${[["accepted", "Accept"], ["corrected", "Correct"], ["rejected", "Reject"]].map(([value, caption]) => `<button data-action="review-inference" data-id="${text(inference.id)}" data-verdict="${value}" aria-pressed="${feedback?.verdict === value}">${caption}</button>`).join("")}</div>${feedback ? `<p class="review-note">${text(feedback.correction || feedback.verdict)}</p>` : ""}`}</div></article>${buttons([["next-profile-item", page === profile.inferred_information.length ? "Review contradictions" : "Next finding", "primary"]])}</section>`;
-    }
-    const last = index === profile.contradictions.length - 1;
-    return `<section class="single-panel debate-panel">${taskHeader(`CONTRADICTION ${index + 1} / ${profile.contradictions.length}`)}${renderContradiction(profile.contradictions[index], index)}
-      <div class="debate-options">${buttons([["regenerate-profile", "Retry profile", "text-link", busy], ["review-questions", "Review my answers", "text-link"], [last ? "profile-move-on" : "next-profile-item", last ? "Next stage" : "Next contradiction", "primary"]])}</div></section>`;
-  };
-  function simInput() {
-    const answers = readableAnswers();
-    const actual = sessionState.predicted.participantAnswers[0]?.text;
-    if (actual?.trim()) answers.push({ id: "actual_prediction_answer", question: dilemma, answer: actual });
-    return { answers, context: { profile: sessionState.inferred.profile, profile_feedback: sessionState.inferred.participantFeedback, contradiction_feedback: sessionState.inferred.contradictionFeedback }, discussed_questions: [...questions, dilemma, proxyQuestion], seen_scenarios: state().seenScenarios };
+  const tag = (kind, text = "") => `<span class="tag tag--${kind}"><span aria-hidden="true">${TAGS[kind][0]}</span>${text || TAGS[kind][1]}</span>`;
+  function head(title, { context = "", meta = "", promptKey = "" } = {}) {
+    const s = sessionState.currentStage;
+    const id = atCheckpoint() ? `<span class="screen-id__num">05</span>THRESHOLD` : `<span class="screen-id__num">${pad(s)}</span>${esc(stages[s - 1][0])}`;
+    const heading = promptKey
+      ? `<h2 class="screen-title spoken-prompt" data-prompt-key="${esc(promptKey)}" data-prompt-text="${esc(title)}" aria-label="${esc(title)}"><span class="prompt-letters" aria-hidden="true">${esc(title)}</span></h2>`
+      : `<h2 class="screen-title">${title}</h2>`;
+    return `<header class="screen-head"><p class="screen-id">${id}${meta ? `<span class="screen-id__meta">${meta}</span>` : ""}</p>${heading}${context ? `<p class="screen-context">${context}</p>` : ""}</header>`;
   }
-  function revision() { const value = simInput(); delete value.seen_scenarios; return JSON.stringify(value); }
-  function signature() {
-    const u = state();
-    return [sessionState.started, sessionState.ended, sessionState.finished, u.entry, sessionState.currentStage, sessionState.questionIndex,
-      sessionState.ui.profilePage, sessionState.ui.predictionCompared, u.checkpoint, u.consentPage, u.simulationStep, u.proxyView,
-      !!sessionState.generated.proxyResponses.length, !!sessionState.generated.simulation].join("|");
+  const screen = (kind, inner) => `<div class="screen screen--${kind}">${inner}</div>`;
+  const answerById = id => readableAnswers().find(a => a.id === id);
+  // Evidence shows what the participant actually said; question numbers stay a faint source note.
+  function evidence(ids, extra = "", summary = "Why does it think this?") {
+    const items = (ids || []).map(answerById).filter(Boolean);
+    const list = items.map(a => `<li>${tag("you")}<p class="evidence-quote">${esc(a.answer)}</p><p class="source-note">in reply to: ${esc(a.question)}</p></li>`).join("");
+    return `<details class="evidence"><summary>${summary}</summary><div class="evidence-body">${extra}${list ? `<ul class="evidence-list">${list}</ul>` : '<p class="hint">No specific answer was cited.</p>'}</div></details>`;
   }
-  function captureDrafts() {
-    stageElement.querySelectorAll("textarea").forEach(field => drafts.set(`${signature()}|${field.id}`, field.value));
+  const elapsed = key => sessionState.operations[key]?.state === "loading" ? `<span class="elapsed" data-since="${sessionState.operations[key].updatedAt}">0:00</span>` : "";
+
+  /* ---------- failures, kept human-readable ---------- */
+  function failureKind(code = "") {
+    if (/missing_api_key|invalid_api_key|credentials/.test(code)) return ["Service not set up", "The AI provider is missing or rejected this computer's credentials (authentication / configuration)."];
+    if (/rate_limit/.test(code)) return ["Service busy", "The provider is rate limiting requests. Wait a moment and retry."];
+    if (/quota|credits/.test(code)) return ["Out of credits or quota", "The provider account has reached its usage or credit limit."];
+    if (/account_restricted/.test(code)) return ["Account restriction", "The provider account does not allow this operation on its current plan."];
+    if (/portrait_rejected/.test(code)) return ["Portrait not accepted", "Use a clear, front-facing portrait. You can retake it on the permission screen."];
+    if (/audio_rejected/.test(code)) return ["Recording not accepted", "The provider rejected the voice sample's format, length or content."];
+    if (/content_rejected|model_refusal/.test(code)) return ["Request declined", "The provider declined this request under its policy."];
+    if (/timeout/.test(code)) return ["Took too long", "The request reached its time limit and was stopped."];
+    if (/incomplete_output|empty_model_output|empty_response/.test(code)) return ["Incomplete result", "The model returned an incomplete or empty answer, so nothing was replaced."];
+    if (/invalid_model_json|invalid_model_output|invalid_profile|invalid_fiction|validation/.test(code)) return ["Did not pass its checks", "The result failed validation, so it was not shown as if it were valid."];
+    if (/network/.test(code)) return ["Connection problem", "The local server or provider could not be reached."];
+    if (/permission_denied/.test(code)) return ["Permission blocked", "Allow access in your browser's site settings, then retry."];
+    if (/device_missing/.test(code)) return ["No device found", "Connect a device and retry."];
+    if (/device_busy/.test(code)) return ["Device in use", "Close the other app using it and retry."];
+    if (/unsupported/.test(code)) return ["Not supported here", "Try a current Chrome or Edge browser, or use text."];
+    return ["Could not finish", ""];
   }
-  function restoreDrafts() {
-    for (const field of stageElement.querySelectorAll("textarea")) if (drafts.has(`${signature()}|${field.id}`) && !field.value) field.value = drafts.get(`${signature()}|${field.id}`);
+  function notice(key, { retry = "Try again", fallback = false } = {}) {
+    const op = sessionState.operations[key];
+    if (!op || !["timeout", "error", "fallback"].includes(op.state)) return "";
+    if (op.state === "fallback") return op.errorCode === "cancelled" ? `<div class="notice notice--info" role="status"><p>${esc(op.message)}</p>${retry ? row(baseAct("retry-operation", retry, "btn-secondary", `data-operation="${key}"`)) : ""}</div>` : "";
+    const [title, hint] = failureKind(op.errorCode);
+    return `<div class="notice" role="alert"><p class="notice__title">${title}</p><p>${esc(op.message)}</p>${hint ? `<p class="hint">${hint}</p>` : ""}
+      ${row(retry ? baseAct("retry-operation", retry, "btn-secondary", `data-operation="${key}"`) : "", fallback ? baseAct("use-operation-fallback", "Use a labelled demonstration", "btn-tertiary", `data-operation="${key}"`) : "")}
+      <details class="tech"><summary>Technical detail</summary><p><code>${esc(op.errorCode || "unknown")}</code> · ${esc(operationDefinitions[key].label)} · ${esc(op.state)}</p></details></div>`;
   }
-  // Flatten reading blocks, not controls. Pagination moves the same DOM nodes, preserving media and input state.
-  function blocksFrom(element) {
-    const output = [];
-    const walk = node => {
-      if (node.nodeType === Node.TEXT_NODE) { if (node.textContent.trim()) { const p = document.createElement("p"); p.textContent = node.textContent; output.push(p); } return; }
-      if (node.nodeType !== Node.ELEMENT_NODE || node.hidden) return;
-      if (node.matches(".prediction-pair") && node.scrollHeight > element.clientHeight - 60 || node.matches("section,article,figure,div") && !node.matches(".single-panel,.prediction-pair,.controls,.choice-row,.input-choice,.tunnel-copy,.record-time,.consent-choice,.source-label,.simulation-part")) {
-        [...node.childNodes].forEach(walk);
-      } else output.push(node);
-    };
-    [...element.childNodes].forEach(walk);
-    return output;
-  }
-  function paginate(container, nav, remembered = 0) {
-    const blocks = blocksFrom(container);
-    container.replaceChildren();
-    nav.hidden = true;
-    nav.replaceChildren();
-    container.style.setProperty("--panel-height", `${Math.max(40, container.clientHeight - 32)}px`);
-    let sheets = [], sheet, carriedLabel = "";
-    const create = (carry = true) => {
-      if (sheet) sheet.hidden = true;
-      sheet = document.createElement("div"); sheet.className = "flow-sheet"; container.append(sheet); sheets.push(sheet);
-      if (carry && carriedLabel) { const caption = document.createElement("p"); caption.className = "flow-context"; caption.textContent = carriedLabel; sheet.append(caption); }
-    };
-    create();
-    const fits = () => sheet.scrollHeight <= sheet.clientHeight + 1 && [...sheet.children].every(child => child.getBoundingClientRect().bottom <= sheet.getBoundingClientRect().bottom + 1);
-    // Try the whole task before reserving space for reading navigation. Most prompts
-    // need no pager at all; only lengthy results should be broken into reading panels.
-    sheet.append(...blocks);
-    const single = fits() || blocks.some(node => node.matches(".single-panel"));
-    if (!single) {
-      sheet.replaceChildren(); nav.hidden = false;
-      container.style.setProperty("--panel-height", `${Math.max(24, container.clientHeight - 40)}px`);
-    }
-    const grouped = [];
-    if (!single) for (const node of blocks) {
-      // Keep a short prompt and its response choices together, never orphan a CTA.
-      if (node.matches(".input-choice,.controls") && grouped.at(-1)?.matches("h2,h3,.scene-line,.small")) {
-        const previous = grouped.pop();
-        const unit = document.createElement("section"); unit.className = "interaction-unit";
-        unit.append(previous, node); grouped.push(unit);
-      } else grouped.push(node);
-    }
-    for (const node of grouped) {
-      const isSource = node.matches(".source-label");
-      if (isSource) carriedLabel = node.textContent;
-      sheet.append(node);
-      if (fits()) continue;
-      node.remove();
-      if (sheet.children.length) create(!isSource);
-      sheet.append(node);
-      if (fits()) continue;
-      // Split prose at word boundaries; do not hide a long paragraph behind ellipses.
-      if (node.matches("p,blockquote,h2,h3,.simulation-part") && !node.querySelector("button,input,textarea,video,audio")) {
-        const words = node.textContent.split(/\s+/); node.remove();
-        let start = 0;
-        while (start < words.length) {
-          const part = node.cloneNode(false); sheet.append(part);
-          let end = start;
-          while (end < words.length) { part.textContent = words.slice(start, end + 1).join(" "); if (!fits() && end > start) break; end++; }
-          if (end === start) end++;
-          part.textContent = words.slice(start, end).join(" "); start = end;
-          if (start < words.length) create();
-        }
-      } else if (node.matches(".controls,.choice-row,.input-choice")) {
-        const children = [...node.children]; node.remove();
-        for (const child of children) { sheet.append(child); if (!fits() && sheet.children.length > 1) { child.remove(); create(); sheet.append(child); } }
-      }
-    }
-    sheets = sheets.filter(s => { if (!s.children.length) { s.remove(); return false; } return true; });
-    let index = Math.min(remembered, Math.max(0, sheets.length - 1));
-    const show = value => {
-      index = Math.max(0, Math.min(value, sheets.length - 1));
-      sheets.forEach((s, i) => { s.hidden = i !== index; });
-      nav.innerHTML = sheets.length > 1 ? container === stageElement ? `<span>Reading ${index + 1} / ${sheets.length}</span>` : `<button type="button" data-page="prev" ${!index ? "disabled" : ""}>Previous panel</button><span>${index + 1} / ${sheets.length}</span><button type="button" data-page="next" ${index === sheets.length - 1 ? "disabled" : ""}>Next panel</button>` : "";
-      nav.hidden = sheets.length <= 1;
-      if (container === stageElement) {
-        currentPage = index; pages = sheets; pageMemory.set(pageKey, index);
-        syncForward();
-      }
-    };
-    nav.onclick = event => { const dir = event.target.closest("[data-page]")?.dataset.page; if (dir) { show(index + (dir === "next" ? 1 : -1)); const heading = sheets[index].querySelector("h2,h3,p"); if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); } } };
-    show(index);
-    return { sheets, show };
-  }
-  function openReader(title, html) {
-    document.getElementById("readerTitle").textContent = title;
-    const content = document.getElementById("readerContent"); content.innerHTML = html;
-    reader.showModal();
-    paginate(content, document.getElementById("readerPager"));
-  }
-  function cancelTransition() {
-    transitionTicket++; transitioning = false;
-    stageElement.getAnimations().forEach(a => a.cancel()); stageElement.style.opacity = "";
-    room.leaveTunnel();
-    room.cancelTravel(); syncForward();
-  }
-  async function travel(change, direction = 1) {
-    if (transitioning) return;
-    transitioning = true;
-    const ticket = ++transitionTicket;
-    room.travel(direction); syncForward();
-    try {
-      const distance = Math.min(260, Math.max(140, innerHeight * .24));
-      if (!room.reduced) await stageElement.animate([{ opacity: 1, transform: "translateY(0)" }, { opacity: 0, transform: `translateY(${-direction * distance}px)` }], { duration: 360, easing: "ease-in", fill: "forwards" }).finished;
-      if (ticket !== transitionTicket) return;
-      change();
-      stageElement.getAnimations().forEach(a => a.cancel());
-      if (!room.reduced) await stageElement.animate([{ opacity: 0, transform: `translateY(${direction * distance}px)` }, { opacity: 1, transform: "translateY(0)" }], { duration: 540, easing: "cubic-bezier(.2,.7,.3,1)" }).finished;
-      if (ticket === transitionTicket) stageElement.focus({ preventScroll: true });
-    } catch { /* End/reset cancels the visual transition immediately. */ }
-    finally { if (ticket === transitionTicket) { transitioning = false; syncForward(); } }
-  }
-  window.showStageTransition = () => false;
-  window.updateRecordClock = () => {
-    base.updateRecordClock();
-    document.getElementById("ambientRecordClock").textContent = formatTime(Math.floor((Date.now() - recordStart) / 1000));
-  };
+
+  /* ---------- prompt reveal (words resolve once per prompt) ---------- */
   window.revealPrompt = () => {
     clearInterval(promptTimer); promptTimer = null;
     const prompt = stageElement.querySelector("[data-prompt-key]");
@@ -257,126 +106,339 @@
     const key = prompt.dataset.promptKey + prompt.dataset.promptText;
     const fresh = !revealedPrompts.has(key);
     revealedPrompts.add(key);
-    prompt.querySelector(".prompt-letters").innerHTML = prompt.dataset.promptText.split(/\s+/).map((word, i) => `<span class="prompt-word ${fresh ? "fresh" : ""}" style="--word-delay:${Math.min(i * 16, 500)}ms">${text(word)}</span>`).join(" ");
+    prompt.querySelector(".prompt-letters").innerHTML = prompt.dataset.promptText.split(/\s+/).map((word, i) => `<span class="prompt-word ${fresh ? "fresh" : ""}" style="--word-delay:${Math.min(i * 22, 600)}ms">${esc(word)}</span>`).join(" ");
     prompt.classList.add("is-complete");
     if (fresh) setTimeout(() => { if (prompt.isConnected) maybeAutoRecordQuestion(prompt.dataset.promptKey); }, room.reduced ? 0 : 900);
   };
+  window.showStageTransition = () => false;
+  window.intro = () => "";
+  window.renderOperationStatus = () => { operationStatusElement.hidden = true; operationStatusElement.replaceChildren(); };
   window.status = (message, kind) => {
     base.status(message, kind);
-    if (state().checkpoint && sessionState.currentStage === 5) {
-      statusElement.classList.remove("status-visible");
-      const deviceMessage = ["camera", "microphone"].some(key => sessionState.operations[key]?.message === message);
-      const help = document.getElementById("permissionHelp");
-      if (kind === "error" && !deviceMessage && help) { help.textContent = message; help.classList.add("warning"); }
-      return;
-    }
-    // Routine success is silent visually; errors and loading have an accessible recovery panel.
-    statusElement.classList.toggle("status-visible", kind === "error" && !operationStatusElement.textContent);
+    // The live region stays screen-reader only; visible feedback lives beside each control.
+    statusElement.classList.add("sr-only");
+    if (kind === "error" && message) forwardHint.textContent = message, forwardHint.classList.add("is-error");
   };
-  window.renderOperationStatus = () => {
-    base.renderOperationStatus();
-    if (state().checkpoint && sessionState.currentStage === 5) operationStatusElement.hidden = true;
-    const slot = document.getElementById("proxyOperation");
-    if (slot) {
-      const pending = ["proxy", "elevenlabs", "did"].map(key => sessionState.operations[key]).filter(item => ["loading", "error", "timeout"].includes(item?.state)).sort((a, b) => b.updatedAt - a.updatedAt)[0];
-      slot.setAttribute("role", "status");
-      slot.innerHTML = pending && (!sessionState.generated.proxyMedia.error || pending.state === "loading") ? `<p class="${pending.state === "loading" ? "small" : "warning"}">${text(pending.message)}${pending.errorCode ? ` [${text(pending.errorCode)}]` : ""}</p>` : "";
-      operationStatusElement.hidden = true;
-    }
+  window.updateRecordClock = () => {
+    base.updateRecordClock();
+    document.getElementById("ambientRecordClock").textContent = formatTime(Math.floor((Date.now() - recordStart) / 1000));
   };
+  window.proxySpeechText = value => base.proxySpeechText(ProxyText.forSpeech(value));
+
+  /* ---------- the shared voice + words workspace ---------- */
   function deviceNotice(key) {
     const item = sessionState.operations[key];
-    if (!item || ["idle", "success"].includes(item.state)) return "";
-    if (item.state === "loading") return `Requesting ${key} access...`;
-    if (item.state === "timeout") return `${key === "camera" ? "Camera" : "Microphone"} took too long. Try again or use text.`;
-    const reasons = { permission_denied: "Permission blocked. Allow access in your browser, then retry.", device_missing: "No device found. Connect one and retry.", device_busy: "Device in use. Close the other app and retry.", unsupported: "Device unavailable in this browser. Use text instead." };
-    return reasons[item.errorCode] || "Device unavailable. Retry or use text.";
+    if (!item || ["idle", "success"].includes(item.state) || item.errorCode === "cancelled") return "";
+    if (item.state === "loading") return `<p class="hint" role="status">Requesting ${key} access…</p>`;
+    return notice(key, { retry: key === "camera" ? "Retry camera" : "Retry microphone" });
   }
-  window.renderOpening = () => `<section class="single-panel opening-panel"><p class="stage-kicker">AN EXPERIMENT IN BEING SEEN</p><h2 class="opening-title">How much of you can a system make?</h2><p class="opening-lede">Enter a conversation. Meet a version of yourself.</p>${controls(act("begin", "Begin", true))}<p class="opening-note">Share only what you choose. You can skip, correct or leave at any time.</p><details><summary>Before you enter</summary><p>This experiment separates what you supply from what AI infers and generates. Your session is kept in browser memory, not a local database. Consented AI requests use external providers, whose retention policies also apply.</p></details></section>`;
-  window.renderDevelopmentStatus = () => base.renderDevelopmentStatus().replace("</details>", `<label for="boundary">At which stage did the AI's version stop feeling like you?</label><select id="boundary"><option value="">Optional: choose a stage</option>${[...stages.map(s => s[0]), "It never felt like me", "It still feels like me", "I am unsure"].map(s => `<option ${sessionState.feedback.boundary === s ? "selected" : ""}>${text(s)}</option>`).join("")}</select></details>`);
-  window.renderPresenceDock = () => {
-    const checkpoint = state().checkpoint && sessionState.currentStage === 5;
-    const slot = document.getElementById("portraitCameraSlot") || (innerWidth < 700 ? document.getElementById("taskCameraSlot") : null);
-    if (slot) slot.append(presenceDock);
-    const visible = sessionState.started && !sessionState.ended && !sessionState.finished && sessionState.currentStage >= 2 && sessionState.currentStage <= 5 && (!checkpoint || !!slot);
-    presenceDock.hidden = !visible; shell.classList.toggle("has-camera", visible && !checkpoint);
-    presenceDock.classList.toggle("inline-camera", !!slot);
-    const existing = document.getElementById("presenceVideo");
-    if (visible && cameraStream && existing?.srcObject === cameraStream) return;
-    if (existing) { existing.pause(); existing.srcObject = null; existing.load(); }
-    if (!visible) { presenceDock.replaceChildren(); return; }
-    presenceDock.innerHTML = `<div class="dock-head">YOUR CAMERA</div>${cameraStream ? '<video id="presenceVideo" autoplay muted playsinline aria-label="Your live mirrored camera preview"></video>' : `<div class="camera-placeholder" role="status" aria-live="polite">${text(checkpoint ? deviceNotice("camera") || "Camera off" : "Camera off")}</div>`}<button type="button" data-v6="camera-switch" role="switch" aria-checked="${!!cameraStream}" ${sessionState.operations.camera?.state === "loading" ? "disabled" : ""}>${checkpoint && deviceNotice("camera") && !cameraStream ? "Retry camera" : `Camera ${cameraStream ? "on" : "off"}`}</button>`;
-    const video = document.getElementById("presenceVideo");
-    if (video && cameraStream) { video.srcObject = cameraStream; video.play().catch(() => {}); }
-  };
+  function voiceColumn(target, audio, { confirmable = false } = {}) {
+    const active = recorder && recordTarget === target;
+    const transcribing = activeOperations.has("transcription");
+    const state = active ? "recording" : transcribing ? "processing" : sessionState.operations.microphone?.state === "error" ? "error" : audio ? "complete" : "ready";
+    const word = { ready: "Ready", recording: "Recording", processing: "Transcribing", complete: confirmable && !sessionState.audioConfirmed ? "Recorded · listen back" : "Recorded", error: "Microphone problem" }[state];
+    let body;
+    if (active) body = `<div class="rec-live"><span class="rec-dot" aria-hidden="true"></span><output id="recordClock" aria-label="Recording time">00:00</output><span class="rec-limit">/ 01:00</span><canvas class="rec-wave" id="recWave" width="240" height="40" aria-hidden="true"></canvas></div>${row(baseAct("stop-recording", "Stop recording", "btn-primary"))}`;
+    else if (audio) body = `<audio controls preload="metadata" src="${audio.url}" aria-label="Your recording"></audio>${row(baseAct("start-recording", "Record again", "btn-secondary", busy ? "disabled" : ""), baseAct("delete-audio", "Delete recording", "btn-tertiary danger"))}`;
+    else body = `<button type="button" class="rec-button" data-action="start-recording" ${busy ? "disabled" : ""}><span class="rec-button__icon" aria-hidden="true"></span><span>Record your answer</span></button><p class="hint">Up to a minute. When you stop, the recording is sent to OpenAI and turned into words you can edit.</p>`;
+    return `<section class="ws-voice" aria-label="Speak your answer"><p class="ws-label">SPEAK <span class="rec-state" data-state="${state}">${word}</span></p>${body}${deviceNotice("microphone")}</section>`;
+  }
+  function wordsColumn({ id, text, origin, audio, placeholder, transcribeNeedsConfirm = false }) {
+    const transcribing = activeOperations.has("transcription");
+    const status = transcribing ? '<span class="ws-status is-working">Transcribing your response…</span>'
+      : origin === "transcribed" ? '<span class="ws-status">Transcribed · edit anything</span>' : text?.trim() ? '<span class="ws-status">Written by you</span>' : '<span class="ws-status">or type instead</span>';
+    const needsConsent = audio && !sessionState.consent.transcription && !text?.trim();
+    const consentCard = needsConsent ? `<div class="inline-consent"><p>Turn your recording into editable words? The audio is sent to OpenAI for transcription.</p>${row(baseAct("allow-transcription", "Transcribe my recording", "btn-secondary", busy ? "disabled" : ""))}</div>` : "";
+    const retry = audio && sessionState.consent.transcription && !text?.trim() && !transcribing && !(transcribeNeedsConfirm && !sessionState.audioConfirmed)
+      ? (notice("transcription", { retry: "Retry transcription" }) || row(baseAct("transcribe", "Transcribe my recording", "btn-secondary", busy ? "disabled" : ""))) : "";
+    return `<section class="ws-words" aria-label="Your words"><p class="ws-label">${origin === "transcribed" ? "WHAT THE SYSTEM HEARD" : "IN YOUR WORDS"} ${status}</p>${consentCard}${retry}
+      <label class="sr-only" for="${id}">Your answer, editable</label><textarea id="${id}" maxlength="4000" ${transcribing ? 'readonly aria-busy="true"' : ""} placeholder="${esc(placeholder)}">${esc(text || "")}</textarea>
+      <p class="hint">Edit freely. What you leave here, not the raw recording, is what the system reads.</p></section>`;
+  }
+  const workspace = (voice, words, cls = "") => `<div class="workspace ${cls}">${voice}${words}</div>`;
+
+  /* ---------- opening + stage 1 ---------- */
+  window.renderOpening = () => screen("opening", `<div class="opening">
+    <p class="opening__kicker">AN EXPERIMENT IN BEING SEEN</p>
+    <h2 class="opening__title opening__title--split"><span>How much of you</span> <span>can a system make?</span></h2>
+    <p class="opening__lede">Give it an image, your voice and a few answers. It will build an interpretation of you, and then speak as you.</p>
+    <p class="opening__note">What it builds is a model, not you. You can correct it, reject it or delete everything at any time.</p>
+    ${row(act("begin", "Enter", "btn-primary btn-large"))}
+    <div class="opening__more"><details><summary>What happens to my information?</summary><p>Your session lives only in this browser's memory, not a database. What you supply, what the AI infers and what it generates are always labelled separately. External AI services (OpenAI, ElevenLabs, D-ID) are used only after you allow each one, and their own retention policies apply.</p></details>
+    <details><summary>How long does it take?</summary><p>About 10–15 minutes, in six stages that go progressively deeper. You can skip, go back or leave whenever you like.</p></details></div></div>`);
+
   window.renderImage = () => {
     const image = sessionState.supplied.image;
-    return `<p class="scene-line">Choose an image. A person, place, object or moment.</p>${image ? `${source("supplied", "IMAGE")}<img src="${image.url}" alt="Your chosen image"><p class="small">${sessionState.photoConfirmed ? "Your image is confirmed." : "Is this the image you want to share?"}</p>${buttons([...(sessionState.photoConfirmed ? [] : [["confirm-image", "Keep this image", "primary"]]), ["retake", "Replace image"], ["delete-image", "Delete image", "danger"]])}` : cameraStream ? `<video id="cameraVideo" class="camera" autoplay muted playsinline aria-label="Mirrored live camera preview"></video>${buttons([["capture", "Take photo", "primary"], ["camera-off", "Turn camera off"]])}` : `<div class="controls"><label class="file-button">Choose an image<input id="imageInput" type="file" accept="image/*"></label><button data-action="enable-camera">Use camera</button></div><p class="small">Camera access begins only if you choose it. This image stays in your temporary session; appearance is not used to infer personality.</p>`}`;
+    let frame;
+    if (image) frame = `<figure class="image-frame">${tag("you", "YOUR IMAGE")}<img src="${image.url}" alt="Your chosen image"><figcaption>${sessionState.photoConfirmed ? "This is the image you chose." : "Is this the one?"}</figcaption></figure>${row(baseAct("retake", "Replace image"), baseAct("delete-image", "Delete", "btn-tertiary danger"))}`;
+    else if (cameraStream) frame = `<figure class="image-frame image-frame--live"><video id="cameraVideo" class="camera" autoplay muted playsinline aria-label="Mirrored live camera preview"></video><figcaption>Live and mirrored. Nothing is kept until you take the photo.</figcaption></figure>${row(baseAct("capture", "Take photo", "btn-primary"), baseAct("camera-off", "Turn camera off", "btn-tertiary"))}`;
+    else frame = `<div class="image-drop"><span class="image-drop__ring" aria-hidden="true"></span>${row(`<label class="btn-secondary file-button">Choose an image<input id="imageInput" type="file" accept="image/*"></label>`, baseAct("enable-camera", "Use camera"))}<p class="hint">The camera starts only if you choose it.</p></div>`;
+    return screen("image", `<div class="split split--image"><div>${head("Begin with one image that matters to you.", { context: "A person, place, object or moment. The system will not read your personality or appearance from it. It only knows that you chose it." })}
+      <details class="evidence"><summary>What is this experience?</summary><div class="evidence-body"><p>Over six stages, a system turns what you share into an interpretation of you, then a prediction, then a double that speaks as you. Every step is an AI reading of limited information, not an objective version of you.</p></div></details></div>
+      <div class="image-col">${frame}${deviceNotice("camera")}</div></div>`);
   };
-  function samples() {
-    return [["story", "Your image story"], ...sessionState.supplied.answers.map((a, i) => [a.id, `Question ${i + 1}`]), ["prediction-answer", "Your prediction answer"], ["clone-sample", "Your voice sample"]].filter(([id]) => recordingFor(id)?.blob);
+
+  /* ---------- stage 2 ---------- */
+  window.renderAudio = () => {
+    const s = sessionState, image = s.supplied.image;
+    const thumb = image && s.photoConfirmed ? `<img class="thumb" src="${image.url}" alt="The image you chose">` : "";
+    return screen("respond", `<div class="respond-head">${thumb}${head("Tell me something this image doesn't show.", { promptKey: "image-story", context: "Speak for about twenty seconds, or write a few lines." })}</div>
+      ${workspace(voiceColumn("story", s.supplied.audio, { confirmable: true }), wordsColumn({ id: "storyText", text: s.supplied.transcript, origin: s.supplied.transcriptOrigin, audio: s.supplied.audio, placeholder: "Begin here…", transcribeNeedsConfirm: true }))}
+      ${s.consent.transcription && s.consent.audioRecording ? `<details class="evidence quiet"><summary>Record the next questions automatically?</summary><div class="evidence-body">${baseAct("toggle-auto-record", s.consent.autoRecordQuestions ? "Turn off automatic recording" : "Start recording after each question appears", "btn-secondary", `aria-pressed="${s.consent.autoRecordQuestions}"`)}<p class="hint">You can stop, re-record or edit every answer.</p></div></details>` : ""}`);
+  };
+
+  /* ---------- stage 3: questions, profile, reviews ---------- */
+  window.renderQuestions = () => {
+    const s = sessionState;
+    if (s.questionIndex >= questions.length) return renderProfile();
+    const a = s.supplied.answers[s.questionIndex];
+    return screen("respond", `${head(a.question, { promptKey: `question-${s.questionIndex + 1}`, meta: `Question ${s.questionIndex + 1} of ${questions.length}` })}
+      ${workspace(voiceColumn(a.id, a.audio), wordsColumn({ id: "questionText", text: a.text, origin: a.textOrigin, audio: a.audio, placeholder: "Your answer, in your own words…" }))}`);
+  };
+  function verdictState(feedback) {
+    if (!feedback) return "";
+    return feedback.verdict === "corrected" ? "contested" : feedback.verdict === "rejected" ? "rejected" : feedback.verdict === "accepted" ? "confirmed" : "";
   }
+  function profileGenerating() {
+    const answered = readableAnswers().filter(a => a.id.startsWith("question_"));
+    return screen("generating", `${head("A model of you is being constructed.", { context: "The system is reading your three answers and separating what you said from what it concludes." })}
+      <div class="generating"><div class="pulse-rings" aria-hidden="true"><span></span><span></span><span></span></div>
+      <p class="generating__line" role="status">${esc(operationDefinitions.identity.loading)} ${elapsed("identity")}</p><p class="hint">This usually takes under a minute. Your answers are safe if it fails.</p></div>
+      <ul class="held-input">${answered.map(a => `<li>${tag("you")}<p>${esc(a.answer.length > 140 ? a.answer.slice(0, 140) + "…" : a.answer)}</p></li>`).join("")}</ul>`);
+  }
+  window.renderProfile = () => {
+    const s = sessionState, profile = s.inferred.profile, demo = s.inferred.mode === "mock";
+    if (activeOperations.has("identity")) return profileGenerating();
+    if (!profile) {
+      const voiceOnly = s.supplied.answers.filter(a => a.audio && !a.text.trim()).length;
+      const typed = s.supplied.answers.filter(a => a.text.trim()).length;
+      return screen("generating", `${head(typed ? "The model could not be built yet." : "There is nothing to interpret yet.", { context: typed ? "Your answers are kept exactly as you left them." : "You chose not to answer, or your recordings still need words." })}
+        ${notice("identity", { retry: "", fallback: true })}
+        ${voiceOnly ? `<p class="notice notice--info">${voiceOnly} voice ${voiceOnly === 1 ? "answer was" : "answers were"} recorded but not transcribed. Go back to transcribe or type ${voiceOnly === 1 ? "it" : "them"}.</p>` : ""}
+        ${row(act("review-questions", "Review my answers", "btn-tertiary"))}`);
+    }
+    const page = s.ui.profilePage, n = profile.inferred_information.length;
+    if (page === 0) return profileOverview(profile, demo);
+    if (page <= n) return inferenceReview(profile.inferred_information[page - 1], page, n, demo);
+    const index = page - n - 1;
+    if (!profile.contradictions.length) return screen("debate", `${head("No contradiction was found.", { meta: "Contradictions" })}<div class="split split--debate"><section class="side side--model">${columnLabel("THE MODEL")}<p class="claim">The answers did not give enough evidence for a clear tension, so the system has not invented one.</p><p class="hint">This does not mean your answers are perfectly consistent, only that this limited information did not show a supported conflict.</p></section><section class="side side--you">${columnLabel("YOU")}<p class="hint">Nothing to confront here. Continue when you are ready.</p>${row(baseAct("regenerate-profile", "Rebuild the profile", "btn-tertiary", busy ? "disabled" : ""), act("review-questions", "Review my answers", "btn-tertiary"))}</section></div>`);
+    return contradictionReview(profile.contradictions[index], index, profile.contradictions.length, demo);
+  };
+  const columnLabel = text => `<p class="column-label">${text}</p>`;
+  function profileOverview(profile, demo) {
+    const s = sessionState;
+    const supplied = readableAnswers().filter(a => a.id !== "image_context");
+    const inferred = profile.inferred_information.map((item, i) => {
+      const state = verdictState(s.inferred.participantFeedback.find(f => f.id === item.id));
+      return `<li class="reveal-item model-item ${state ? `is-${state}` : ""} confidence-${esc(item.confidence_label)}" style="--i:${i + 2}">${state ? tag(state) : tag("model")}<p>${esc(item.statement)}</p><p class="confidence">${esc(item.confidence_label)} confidence · a label, not a measurement</p></li>`;
+    }).join("");
+    const unknowns = (profile.unknowns || []).slice(0, 3).map(u => `<li class="reveal-item uncertain-item" style="--i:${profile.inferred_information.length + 2}">${tag("uncertain")}<p>${esc(u)}</p></li>`).join("");
+    const conflicts = profile.contradictions.length ? `<li class="reveal-item conflict-item" style="--i:${profile.inferred_information.length + 3}">${tag("conflict", `${profile.contradictions.length} POSSIBLE ${profile.contradictions.length === 1 ? "CONTRADICTION" : "CONTRADICTIONS"}`)}<p>Something in your answers does not quite fit. You will be asked to confront ${profile.contradictions.length === 1 ? "it" : "them"}.</p></li>` : "";
+    return screen("profile", `${head("A version of you is taking shape.", { context: "This is a temporary interpretation built from limited answers, not your identity. Review each part next." })}
+      ${demo ? `<p>${tag("demo")}</p>` : ""}${notice("identity", { retry: "Retry profile" })}
+      <p class="profile-summary reveal-item" style="--i:0">${esc(profile.profile_summary)}</p>
+      <div class="split split--profile"><section class="side side--you">${columnLabel("WHAT YOU SAID")}<ul class="ledger">${supplied.map((a, i) => `<li class="reveal-item you-item" style="--i:${i + 1}"><p>${esc(a.answer.length > 160 ? a.answer.slice(0, 160) + "…" : a.answer)}</p></li>`).join("")}</ul></section>
+      <section class="side side--model">${columnLabel("WHAT THE MODEL CONCLUDED")}<ul class="ledger">${inferred}${unknowns}${conflicts}</ul></section></div>
+      ${row(baseAct("regenerate-profile", "Rebuild the profile", "btn-tertiary", busy ? "disabled" : ""), act("review-questions", "Review my answers", "btn-tertiary"))}`);
+  }
+  function inferenceReview(item, page, n, demo) {
+    const s = sessionState, feedback = s.inferred.participantFeedback.find(f => f.id === item.id);
+    const state = verdictState(feedback), editing = s.ui.correctingInferenceId === item.id;
+    const ack = acknowledge === item.id ? "is-ack" : "";
+    const extra = `<p>${tag("uncertain")} ${esc(item.uncertainty_reason)}</p>${item.alternative_interpretation ? `<p class="hint">Another reading: ${esc(item.alternative_interpretation)}</p>` : ""}`;
+    const choices = [["accepted", "Accurate"], ["corrected", "Correct it"], ["rejected", "Reject"]].map(([value, caption]) => `<button type="button" class="choice" data-action="review-inference" data-id="${esc(item.id)}" data-verdict="${value}" aria-pressed="${editing ? value === "corrected" : feedback?.verdict === value}">${caption}</button>`).join("");
+    const correction = editing ? `<div class="inline-field"><label for="inferenceCorrection">What did it miss? Say it in your own words.</label><textarea id="inferenceCorrection">${esc(feedback?.correction || "")}</textarea>${row(baseAct("save-inference-correction", "Keep my correction", "btn-secondary"), baseAct("cancel-inference-correction", "Cancel", "btn-tertiary"))}</div>` : "";
+    const yours = feedback?.correction && !editing ? `<div class="you-statement">${tag("you", "YOUR CORRECTION")}<p>${esc(feedback.correction)}</p></div>` : "";
+    return screen("debate", `${head("Does this sound like you?", { meta: `Interpretation ${page} of ${n}` })}${demo ? `<p>${tag("demo")}</p>` : ""}
+      <div class="split split--debate"><section class="side side--model ${state ? `is-${state}` : ""} ${ack}">${columnLabel("THE MODEL")}${state ? tag(state) : tag("model")}<p class="claim">${esc(item.statement)}</p><p class="confidence">${esc(item.confidence_label)} confidence</p>${state ? `<p class="revision-note">${{ contested: "The model has been contested. Your correction replaces this reading in later stages.", rejected: "Rejected. This reading is excluded from later stages.", confirmed: "You confirmed this reading." }[state]}</p>` : ""}${evidence(item.evidence_ids, extra)}</section>
+      <section class="side side--you">${columnLabel("YOU")}<div class="choices" role="group" aria-label="Your verdict">${choices}</div>${correction}${yours}</section></div>`);
+  }
+  function contradictionReview(item, index, total, demo) {
+    const id = contradictionId(index), review = sessionState.inferred.contradictionFeedback.find(r => r.id === id);
+    const ack = acknowledge === id ? "is-ack" : "";
+    const choices = [["accurate", "It's a real tension"], ["context-needed", "It needs context"], ["not-a-contradiction", "Not a conflict"]].map(([value, caption]) => `<button type="button" class="choice" data-action="review-contradiction" data-id="${id}" data-verdict="${value}" aria-pressed="${review?.verdict === value}">${caption}</button>`).join("");
+    const state = review?.verdict ? (review.verdict === "not-a-contradiction" ? "rejected" : review.verdict === "context-needed" ? "context" : "confirmed") : "";
+    const stateTag = state === "context" ? tag("contested", "CONTEXT ADDED BY YOU") : state === "rejected" ? tag("rejected", "DISPUTED BY YOU") : state ? tag(state) : tag("conflict");
+    return screen("debate", `${head("Something does not quite fit.", { meta: `Contradiction ${index + 1} of ${total}` })}${demo ? `<p>${tag("demo")}</p>` : ""}
+      <div class="split split--debate split--tension"><section class="side side--model ${state ? `is-${state}` : ""} ${ack}">${columnLabel("THE MODEL")}${stateTag}<p class="claim">${esc(item.description)}</p>${state ? `<p class="revision-note">${{ rejected: "You disputed this tension. Your explanation travels with it.", context: "You added context the model could not see.", confirmed: "You agreed this tension is real." }[state]}</p>` : ""}${evidence(item.evidence_ids, item.possible_explanation ? `<p>${tag("model", "ITS GUESS AT AN EXPLANATION")} ${esc(item.possible_explanation)}</p>` : "")}</section>
+      <section class="side side--you">${columnLabel("YOU")}<div class="choices" role="group" aria-label="Your response to this contradiction">${choices}</div>
+      <div class="inline-field"><label for="contradictionExplanation">What is the model missing?</label><textarea id="contradictionExplanation" placeholder="Explain, disagree or add context…">${esc(review?.explanation || "")}</textarea></div></section></div>`);
+  }
+
+  /* ---------- stage 4 ---------- */
+  window.renderPrediction = () => {
+    const s = sessionState, prediction = s.predicted.predictions[0], actual = s.predicted.participantAnswers[0], comparison = s.predicted.comparisons[0];
+    const demo = s.predicted.mode === "mock" ? tag("demo") : "";
+    const title = head(dilemma, { promptKey: "prediction-dilemma", context: s.predictionShown ? "" : "Before you answer, the system will make its guess." });
+    const modelText = prediction?.predicted_response ? `<p class="claim claim--predicted">${esc(prediction.predicted_response)}</p>` : `<p class="claim">I do not have enough evidence to predict your choice.</p>`;
+    const why = prediction ? evidence(prediction.evidence_ids, `<p>${tag("uncertain")} ${esc(prediction.uncertainty_statement || "")}</p>${prediction.alternative_possible_response ? `<p class="hint">It also considered: ${esc(prediction.alternative_possible_response)}</p>` : ""}`) : "";
+    if (!s.predictionShown) {
+      const loading = activeOperations.has("prediction");
+      return screen("predict", `${title}<div class="split split--debate"><section class="side side--model ${loading ? "is-working" : "is-silent"}">${columnLabel("THE MODEL")}<p class="claim claim--quiet" role="status">${loading ? `${esc(operationDefinitions.prediction.loading)} ${elapsed("prediction")}` : "The model has not spoken yet."}</p>${notice("prediction", { retry: "", fallback: true })}</section>
+        <section class="side side--you">${columnLabel("YOU")}<p class="hint">You will answer after you see its guess.</p>${developerMode || mockMode ? row(baseAct("mock-prediction", "Use simulated prediction", "btn-tertiary")) : ""}</section></div>`);
+    }
+    if (!s.ui.predictionCompared) {
+      return screen("predict", `${title}<div class="split split--debate"><section class="side side--model">${columnLabel("THE MODEL")}${tag("predicted")}${demo}${modelText}<p class="confidence">${esc(prediction?.confidence_label || "low")} confidence</p>${why}</section>
+        <section class="side side--you">${columnLabel("YOU")}<p class="side-question">And you? What would you actually choose?</p>
+        ${workspace(voiceColumn("prediction-answer", actual?.audio), wordsColumn({ id: "actualAnswer", text: actual?.text, origin: actual?.textOrigin, audio: actual?.audio, placeholder: "What would you choose?" }), "workspace--stacked")}</section></div>`);
+    }
+    const choices = ["Correct", "Partly correct", "Incorrect"].map(v => `<button type="button" class="choice" data-action="rate-prediction" data-value="${v}" aria-pressed="${comparison?.rating === v}">${v}</button>`).join("");
+    return screen("predict", `${head("How close was it?", { meta: "Prediction and reality" })}
+      <div class="split split--compare"><section class="side side--model">${columnLabel("THE MODEL PREDICTED")}${demo}<p class="claim">${esc(prediction?.predicted_response || "It withheld a prediction.")}</p></section>
+      <section class="side side--you">${columnLabel("YOU CHOSE")}${tag(actual?.textOrigin === "transcribed" ? "heard" : "you")}<p class="you-claim">${esc(actual?.text || "")}</p></section></div>
+      <div class="verdict"><div class="choices" role="group" aria-label="How close was the prediction">${choices}</div><div class="inline-field"><label for="predictionCorrection">What did it miss? (optional)</label><textarea id="predictionCorrection" placeholder="In your own words…">${esc(comparison?.explanation || "")}</textarea></div></div>`);
+  };
+
+  /* ---------- threshold: three permission screens ---------- */
+  function samples() {
+    return [["story", "Your image story"], ...sessionState.supplied.answers.map((a, i) => [a.id, `Your answer to question ${i + 1}`]), ["prediction-answer", "Your prediction answer"], ["clone-sample", "A new voice sample"]].filter(([id]) => recordingFor(id)?.blob);
+  }
+  // Every answer recording is transcribed as soon as it stops; recording is the consent, disclosed on the button.
+  const transcribable = target => target === "story" || target === "prediction-answer" || /^question_/.test(target);
   window.setRecording = (target, recording) => {
+    if (recording && transcribable(target)) sessionState.consent.transcription = true;
     base.setRecording(target, recording);
     if (target === "clone-sample" && recording) sessionState.ui.selectedVoiceTarget = target;
+    // script.js auto-transcribes question and prediction answers; the image story also needed a confirm step.
+    if (recording && target === "story") { sessionState.audioConfirmed = true; setTimeout(() => void transcribeCurrent("story"), 0); }
   };
+  function permission(n, title, uses, purpose, body, alternatives, state) {
+    return screen("permission", `<div class="permission" data-permission="${n}">
+      <ol class="permission-steps" aria-label="Permission ${n + 1} of 3">${[0, 1, 2].map(i => `<li class="${i < n ? "done" : i === n ? "current" : ""}"><span class="sr-only">Permission ${i + 1}${i === n ? " (current)" : ""}</span></li>`).join("")}</ol>
+      ${head(title, { meta: `Permission ${n + 1} of 3`, context: "The system is about to become more like you." })}
+      <dl class="permission-terms"><div><dt>What it uses</dt><dd>${uses}</dd></div><div><dt>What for</dt><dd>${purpose}</dd></div></dl>
+      ${state ? `<p class="permission-state">${state}</p>` : ""}${body}
+</div>`);
+  }
   function checkpoint() {
-    const u = state(), c = sessionState.consent;
-    const toggle = (name, caption) => `<label class="consent-choice"><input type="checkbox" data-consent="${name}" ${c[name] ? "checked" : ""}>${caption}</label>`;
-    let html = `<section class="single-panel consent-panel" data-permission="${u.consentPage}"><p class="permission-count">BEFORE THE DOUBLE ANSWERS · ${u.consentPage + 1} / 3</p>`;
-    if (u.consentPage === 0) html += `<h3 class="scene-line">May it speak as you?</h3><p>OpenAI will use your shared words and temporary profile to answer on your behalf. Its answer may be wrong and will be labelled as AI-generated.</p>${toggle("proxyResponse", "Allow an AI answer on my behalf")}<p id="permissionHelp" class="small" aria-live="polite">Voice and image permissions are separate. You can decline and skip Stage 5.</p>`;
+    const u = ui(), c = sessionState.consent;
+    if (u.consentPage === 0) return permission(0, "May it speak as you?", "Your answers, corrections and the temporary profile.", "OpenAI writes an answer to a new question, in the first person, as if it were you. It will be labelled as generated and may be wrong.", "",
+      "", c.proxyResponse ? "Currently allowed." : "");
     if (u.consentPage === 1) {
       const options = samples();
       if (!sessionState.ui.selectedVoiceTarget && options.length) sessionState.ui.selectedVoiceTarget = options[0][0];
-      const sample = bestVoiceRecording();
-      html += `<h3 class="scene-line">Your words, in your voice?</h3><p>With permission, ElevenLabs receives your recording when you generate. We request clone deletion afterward; provider retention may still apply.</p>${toggle("voiceCloning", "Allow voice cloning from my selected recording")}
-      <div class="voice-tools">${options.length ? `<div class="sample-picker"><label for="voiceSample">SUPPLIED BY YOU · Choose your recording</label><select id="voiceSample">${options.map(([id, label]) => `<option value="${id}" ${sessionState.ui.selectedVoiceTarget === id ? "selected" : ""}>${label}</option>`).join("")}</select><audio aria-label="Play your selected voice sample" controls src="${sample?.url}"></audio></div>` : '<p class="small">No sample yet. Record a few sentences below, or continue without cloning.</p>'}
-      <div class="sample-recorder">${recorder ? '<p class="record-time">Recording <output id="recordClock">00:00</output></p>' + buttons([["stop-recording", "Stop recording", "primary"]]) : buttons([["start-recording", deviceNotice("microphone") ? "Retry recording" : "Record a voice sample", "", busy]])}<p id="permissionHelp" class="small" role="status" aria-live="polite">${text(deviceNotice("microphone") || (capabilities?.elevenlabs === false ? "Cloning unavailable here. Use text only." : "Your voice only; local until generation."))}</p></div></div>`;
+      const sample = bestVoiceRecording(), active = recorder && recordTarget === "clone-sample";
+      const picker = options.length ? `<div class="field"><label for="voiceSample">Which recording should it learn from?</label><select id="voiceSample">${options.map(([id, label]) => `<option value="${id}" ${sessionState.ui.selectedVoiceTarget === id ? "selected" : ""}>${label}</option>`).join("")}</select><audio controls src="${sample?.url || ""}" aria-label="Play the selected voice sample"></audio></div>` : '<p class="hint">No recording yet. Record a few sentences in your own voice.</p>';
+      const recorderUi = active ? `<div class="rec-live"><span class="rec-dot" aria-hidden="true"></span><output id="recordClock">00:00</output><span class="rec-limit">/ 01:00</span><canvas class="rec-wave" id="recWave" width="240" height="40" aria-hidden="true"></canvas></div>${row(baseAct("stop-recording", "Stop recording", "btn-primary"))}`
+        : row(baseAct("start-recording", options.length ? "Record a new sample" : "Record a voice sample", "btn-secondary", busy ? "disabled" : ""));
+      const unavailable = capabilities?.elevenlabs === false ? '<p class="notice notice--info">Voice cloning is not configured on this computer. You can continue with text only.</p>' : "";
+      return permission(1, "Your words, in your voice?", "One recording of your own voice that you choose here.", "ElevenLabs creates a temporary clone so the double's answer is spoken in your voice. Deletion of the clone is requested afterwards; provider retention may still apply.",
+        `<div class="permission-tools">${picker}<div class="field">${recorderUi}${deviceNotice("microphone")}</div></div>${unavailable}`,
+        "", c.voiceCloning ? "Currently allowed." : "");
     }
-    if (u.consentPage === 2) {
-      const portrait = sessionState.supplied.portrait;
-      const reviewing = portrait && !u.retakingPortrait;
-      const portraitControls = reviewing
-        ? controls(act("confirm-portrait", u.portraitConfirmed ? "Portrait confirmed" : "Keep portrait", true), act("retake-portrait", "Retake"), ...(cameraStream ? [act("camera-switch", "Turn camera off")] : []))
-        : controls(act("take-portrait", "Take my portrait", true));
-      const portraitHelp = capabilities?.did === false ? "Animation unavailable here. Still portrait and text remain available."
-        : c.faceAnimation && !c.voiceCloning ? "Animation needs voice cloning. Enable it on the previous panel." : "Use your own portrait, not the image you chose earlier.";
-      html += `<h3 class="scene-line">Give the double a face?</h3><p>D-ID receives your confirmed portrait and cloned audio, not live video. We request deletion afterward; provider retention may still apply.</p>${toggle("faceAnimation", "Allow my portrait and cloned audio to be animated")}
-        <div class="portrait-tools">${reviewing ? `<div class="portrait-still">${source("supplied", "PORTRAIT")}<img class="setup-portrait" src="${portrait.url}" alt="Your portrait for animation"></div>` : '<div id="portraitCameraSlot"></div>'}<div class="portrait-actions">${portraitControls}<p id="permissionHelp" class="small" aria-live="polite">${text(portraitHelp)}</p></div></div>`;
-    }
-    return html + "</section>";
+    const portrait = sessionState.supplied.portrait, reviewing = portrait && !u.retakingPortrait;
+    const frame = reviewing ? `<div class="portrait-frame"><figure class="portrait-frame">${tag("you", "YOUR PORTRAIT")}<img src="${portrait.url}" alt="Your captured portrait"><figcaption>${u.portraitConfirmed ? "Confirmed as the face of your double." : "Not used until you confirm it."}</figcaption></figure>${row(act("retake-portrait", "Retake", "btn-secondary"))}</div>`
+      : `<div class="portrait-frame portrait-frame--live"><div id="portraitCameraSlot"></div>${cameraStream ? row(act("take-portrait", "Take photo", "btn-primary")) : row(act("camera-switch", "Turn on camera", "btn-secondary"))}<p class="hint">Look into the camera, face lit from the front. Your earlier image is not reused.</p></div>`;
+    const blocked = !c.voiceCloning ? '<p class="notice notice--info">Animation needs your cloned voice. You chose not to clone it, so the double will appear as text with no face.</p>'
+      : capabilities?.did === false ? '<p class="notice notice--info">Animation is not configured on this computer. The double will use your voice without a moving face.</p>' : "";
+    return permission(2, "Give the double a face?", "A portrait you take and confirm here, plus the cloned audio. Never live video.", "D-ID animates the portrait so it appears to speak the double's answer. Deletion is requested afterwards; provider retention may still apply.",
+      blocked || `<div class="permission-tools permission-tools--portrait">${frame}${deviceNotice("camera")}</div>`,
+      "", c.faceAnimation ? "Currently allowed." : "");
+  }
+
+  /* ---------- stage 5: response screen + review screen ---------- */
+  function pipeline() {
+    const s = sessionState, media = s.generated.proxyMedia, ops = s.operations, has = !!s.generated.proxyResponses.length;
+    const word = (done, key, wanted = true) => !wanted ? ["off", "not requested"] : done ? ["done", "ready"] : key !== "proxy" && mockMode ? ["off", "not sent in demonstration"] : ops[key].state === "loading" ? ["working", "in progress"] : ["error", "timeout"].includes(ops[key].state) ? ["error", "failed"] : ["waiting", "waiting"];
+    const steps = [["Constructing response", word(has, "proxy")], ["Preparing your cloned voice", word(!!media.audio, "elevenlabs", s.consent.voiceCloning)], ["Creating the talking double", word(!!media.video, "did", s.consent.faceAnimation)]];
+    return `<ol class="pipeline" aria-label="Generation steps">${steps.map(([label, [state, text]]) => `<li data-state="${state}"><span class="pipeline__dot" aria-hidden="true"></span>${label}<span class="pipeline__state">${text}</span></li>`).join("")}</ol>`;
+  }
+  function doubleMedia() {
+    const media = sessionState.generated.proxyMedia, portrait = sessionState.supplied.portrait, loadingDid = activeOperations.has("did");
+    if (media.video) return `<div class="double-frame is-present"><video class="double-video" controls playsinline preload="metadata" src="${media.video.url}" aria-label="Your talking double"></video></div>`;
+    const still = portrait && sessionState.consent.faceAnimation ? `<img src="${portrait.url}" alt="Your still portrait; it is not animated">` : `<span class="double-frame__ghost" aria-hidden="true"></span>`;
+    return `<div class="double-frame ${loadingDid ? "is-forming" : ""}">${still}</div>${media.audio ? `<audio controls preload="metadata" src="${media.audio.url}" aria-label="The double's answer in your cloned voice"></audio>` : ""}`;
+  }
+  function mediaTruth() {
+    const media = sessionState.generated.proxyMedia;
+    return media.video ? "Talking portrait with your cloned voice" : media.audio ? (sessionState.consent.faceAnimation ? "Your cloned voice; the face is not animated" : "Your cloned voice, no face") : "Text only; no voice or animation was generated";
   }
   window.renderProxy = () => {
-    if (state().checkpoint) return checkpoint();
-    const item = sessionState.generated.proxyResponses[0], media = sessionState.generated.proxyMedia, portrait = sessionState.supplied.portrait;
-    const head = taskHeader(item ? state().proxyView === "review" ? "YOUR REVIEW" : "THE DOUBLE'S RESPONSE" : "A QUESTION FOR YOUR DOUBLE", 5);
-    if (!sessionState.consent.proxyResponse) return `<section class="single-panel proxy-panel">${head}<p>You chose not to let the double answer.</p>${controls(act("permissions", "Review permissions"), act("skip-double", "Next stage", true))}</section>`;
-    if (!item) return `<section class="single-panel proxy-panel">${head}${spokenPrompt("proxy-question", proxyQuestion)}<p class="small">You do not answer first. This will be an AI interpretation, not your real answer.</p>${buttons([["generate-proxy", "Let the double answer", "primary", busy]])}${controls(act("permissions", "Review permissions"))}<div id="proxyOperation"></div></section>`;
-    const evidence = `<details><summary>Why did the AI say this?</summary><p>Confidence: ${text(item.confidence_label)}. This interpretation may be wrong.</p>${item.evidence_ids.map(id => { const a = readableAnswers().find(a => a.id === id); return a ? `${source("supplied")}<p>${text(a.answer)}</p>` : ""; }).join("")}</details>`;
-    if (state().proxyView === "review") return `<section class="single-panel proxy-panel proxy-review">${head}${source("proxy", "YOUR REVIEW OF THE GENERATED RESPONSE")}<h3 class="scene-line">Would you have said this?</h3>${buttons([["review-proxy", "Accept"], ["correct-proxy", "Correct"], ["reject-proxy", "Reject"], ["delete-proxy", "Delete response", "danger"]])}${sessionState.ui.correctingProxy ? `<label for="proxyCorrection">What would you say instead?</label><textarea id="proxyCorrection">${text(item.correction || "")}</textarea>${buttons([["save-proxy-correction", "Keep my correction", "primary"], ["cancel-proxy-correction", "Cancel"]])}` : item.feedback ? `<p class="review-note">Your review: ${text(item.feedback)}${item.correction ? `: ${text(item.correction)}` : ""}</p>` : ""}${evidence}</section>`;
-    const hasMedia = media.video || media.audio || portrait;
-    return `<section class="single-panel proxy-panel">${head}<h3 class="proxy-question">${text(proxyQuestion)}</h3><div class="proxy-composition ${hasMedia ? "with-media" : ""}">${hasMedia ? `<div class="proxy-player">${media.video ? `${source("proxy", "TALKING DOUBLE")}<video class="double-media" controls playsinline src="${media.video.url}"></video>` : portrait ? `${source("supplied", "STILL PORTRAIT")}<img class="double-media" src="${portrait.url}" alt="Your still portrait; no animation is shown">` : ""}${media.audio && !media.video ? `${source("proxy", "CLONED VOICE")}<audio controls src="${media.audio.url}"></audio>` : ""}</div>` : ""}<div class="proxy-script">${source("proxy", sessionState.generated.proxyMode === "mock" ? "MOCK DEMONSTRATION" : "")}<p class="proxy-response">${text(ProxyText.clean(item.text))}</p><p class="small">This is an AI interpretation, not your real answer.</p></div></div><p class="media-truth">${media.video ? "Talking portrait with cloned speech" : media.audio ? "Cloned speech; no talking animation" : "Text response; no generated voice or animation"}</p><div id="proxyOperation"></div>${media.error ? `<p class="warning media-error">${text(media.error)}</p>` : ""}${controls(act("permissions", "Review permissions"), ...(sessionState.consent.voiceCloning && !media.video ? [act("retry-media", media.audio ? "Retry animation" : "Retry cloned voice")] : []))}</section>`;
+    if (atCheckpoint()) return checkpoint();
+    const s = sessionState, u = ui(), item = s.generated.proxyResponses[0], media = s.generated.proxyMedia;
+    if (!s.consent.proxyResponse) return screen("double", `${head("The double stays silent.", { context: "You chose not to let the system speak as you. Nothing was generated." })}${row(act("permissions", "Review permissions", "btn-tertiary"))}`);
+    const demo = s.generated.proxyMode === "mock" ? tag("demo") : "";
+    if (item && u.proxyView === "review") {
+      const editing = s.ui.correctingProxy, state = item.feedback === "corrected" ? "contested" : item.feedback === "rejected" ? "rejected" : item.feedback === "accepted" ? "confirmed" : "";
+      const choices = [["review-proxy", "Accept", "accepted"], ["correct-proxy", "Correct", "corrected"], ["reject-proxy", "Reject", "rejected"]].map(([action, caption, value]) => `<button type="button" class="choice" data-action="${action}" aria-pressed="${editing ? value === "corrected" : item.feedback === value}">${caption}</button>`).join("");
+      return screen("review", `${head("Would you have said this?", { meta: "Your judgement" })}
+        <div class="split split--debate"><section class="side side--model side--double ${state ? `is-${state}` : ""} ${acknowledge === "proxy" ? "is-ack" : ""}">${columnLabel("YOUR DOUBLE SAID")}${state ? tag(state) : tag("double")}${demo}
+          <div class="double-recap">${s.supplied.portrait && s.consent.faceAnimation ? `<img class="thumb" src="${s.supplied.portrait.url}" alt="">` : ""}<p class="double-speech">${esc(ProxyText.clean(item.text))}</p></div>
+          ${state ? `<p class="revision-note">${{ contested: "Contested. Your words now stand beside the double's.", rejected: "Rejected. This is not treated as something you would say.", confirmed: "You accepted this as something you might say." }[state]}</p>` : ""}</section>
+        <section class="side side--you">${columnLabel("YOU")}<p class="side-question">At what point does a plausible answer stop being you?</p><div class="choices" role="group" aria-label="Your judgement of the double's answer">${choices}</div>
+          ${editing ? `<div class="inline-field"><label for="proxyCorrection">What would you actually say?</label><textarea id="proxyCorrection">${esc(item.correction || "")}</textarea>${row(baseAct("save-proxy-correction", "Keep my correction", "btn-secondary"), baseAct("cancel-proxy-correction", "Cancel", "btn-tertiary"))}</div>`
+            : item.feedback === "corrected" && item.correction ? `<div class="you-statement">${tag("you", "WHAT YOU WOULD SAY")}<p>${esc(item.correction)}</p></div>` : ""}
+          ${row(baseAct("delete-proxy", "Delete this response", "btn-tertiary danger"))}</section></div>`);
+    }
+    const busyNow = ["proxy", "elevenlabs", "did"].some(k => activeOperations.has(k));
+    const failures = ["proxy", "elevenlabs", "did"].map(k => k === "proxy" && item ? "" : notice(k, { retry: k === "did" ? "Retry animation" : k === "elevenlabs" ? "Retry cloned voice" : "", fallback: k === "proxy" })).join("");
+    const mediaLabel = !media.audio ? "Create the cloned voice" : s.consent.faceAnimation ? "Create the talking face" : "";
+    const retryMedia = item && mediaLabel && !busyNow && s.consent.voiceCloning && !mockMode && !media.video && !failures.includes("data-operation") ? row(act("retry-media", mediaLabel, "btn-secondary")) : "";
+    const response = item ? `${tag("double")}${demo}<p class="double-speech">${esc(ProxyText.clean(item.text))}</p><p class="hint">An AI interpretation of you, not your real answer.</p>${evidence(item.evidence_ids, `<p>${esc(item.confidence_label)} confidence. This interpretation may be wrong.</p>`, "What did it draw on?")}`
+      : activeOperations.has("proxy") ? `<p class="claim claim--quiet" role="status">${esc(operationDefinitions.proxy.loading)} ${elapsed("proxy")}</p>`
+        : `<p class="claim claim--quiet">You do not answer first. When you are ready, the double will answer in your place.</p>`;
+    const did = s.operations.did;
+    return screen("double", `${head(proxyQuestion, { promptKey: "proxy-question", meta: item ? "The double answers" : "A question for your double" })}
+      <div class="split split--double"><section class="double-stage" aria-label="Your digital double">${doubleMedia()}<p class="media-truth">${item ? mediaTruth() : "Not yet generated"}</p>${pipeline()}${did.state === "loading" ? `<p class="hint" role="status">${esc(did.message)} ${elapsed("did")}</p>` : ""}</section>
+      <section class="double-script">${response}${failures}${item && media.error && mockMode ? `<p class="notice notice--info">${esc(media.error)}</p>` : ""}${retryMedia}${item && busyNow ? row(act("stop-waiting", "Stop waiting, keep what is ready", "btn-tertiary")) : ""}${row(act("permissions", "Review permissions", "btn-tertiary"), developerMode || mockMode ? (!item ? baseAct("mock-proxy", "Use simulated answer", "btn-tertiary") : "") : "")}</section></div>`);
   };
+  window.generateProxyMedia = async () => {
+    if (mockMode) { sessionState.generated.proxyMedia.error = "Demonstration mode: nothing was sent to a voice or animation provider."; render(); return; }
+    if (sessionState.consent.faceAnimation && !ui().portraitConfirmed) return status("Confirm your portrait in the permission screen first.", "error");
+    return base.generateProxyMedia();
+  };
+
+  /* ---------- stage 6: hypothetical self ---------- */
+  function simInput() {
+    const answers = readableAnswers();
+    const actual = sessionState.predicted.participantAnswers[0]?.text;
+    if (actual?.trim()) answers.push({ id: "actual_prediction_answer", question: dilemma, answer: actual });
+    return { answers, context: { profile: sessionState.inferred.profile, profile_feedback: sessionState.inferred.participantFeedback, contradiction_feedback: sessionState.inferred.contradictionFeedback }, discussed_questions: [...questions, dilemma, proxyQuestion], seen_scenarios: ui().seenScenarios };
+  }
+  function revision() { const value = simInput(); delete value.seen_scenarios; return JSON.stringify(value); }
   function simEvidence(item) {
     const context = sessionState.generated.simulationContext || core.evidenceContext(simInput());
     const rows = item.evidence.map(e => {
-      const s = context.sources.find(row => row.id === e.source_id);
-      return `${source(e.type)}<h3>${text(s?.label || e.source)}</h3><p>${text(s?.text || "This source is no longer eligible.")}</p>${source("inferred", "INFLUENCE ON THIS SIMULATION")}<p>${text(e.interpretation)}</p>`;
+      const src = context.sources.find(r => r.id === e.source_id);
+      return `<li>${tag(e.type === "inferred" ? "model" : "you")}<p class="evidence-quote">${esc(src?.text || "This source is no longer eligible.")}</p><p class="source-note">${esc(src?.label || e.source)}</p><p>${tag("generated", "HOW IT WAS USED")} ${esc(e.interpretation)}</p></li>`;
     }).join("");
-    return `${rows}${item.contradictory_evidence.map(c => `${source("inferred", "POSSIBLE CONTRADICTION")}<p>${text(c.description)}</p>${c.participant_explanation ? `${source("supplied", "YOUR EXPLANATION")}<p>${text(c.participant_explanation)}</p>` : ""}`).join("")}${source("inferred", "UNCERTAINTY")}<p>Confidence: ${text(item.confidence)}</p><p>${text(item.uncertainty_statement)}</p>${source("invented", "ALTERNATIVE ACTION")}<h3>Another possible action</h3><p>${text(item.alternative_action)}</p>${source("unknown")}<p>${item.unknowns.map(text).join(" ") || "The actual outcome is unknown."}</p>`;
+    const conflicts = item.contradictory_evidence.map(c => `<li>${tag("conflict")}<p>${esc(c.description)}</p>${c.participant_explanation ? `<p>${tag("you", "YOUR EXPLANATION")} ${esc(c.participant_explanation)}</p>` : ""}</li>`).join("");
+    return `<ul class="evidence-list">${rows}${conflicts}</ul><p>${tag("uncertain")} ${esc(item.confidence)} confidence. ${esc(item.uncertainty_statement)}</p><p>${tag("generated", "ANOTHER POSSIBLE ACTION")} ${esc(item.alternative_action)}</p><p>${tag("uncertain", "UNKNOWN")} ${item.unknowns.map(esc).join(" ") || "The actual outcome is unknown."}</p>`;
   }
+  // Presentation only: the saved structured result becomes one passage. No new model call.
+  function narrative(item) {
+    const dialogue = item.predicted_dialogue ? `<p>You might say, <q>${esc(item.predicted_dialogue.replace(/^["“]|["”]$/g, ""))}</q></p>` : "";
+    return `<p class="narrative__context">${esc(item.scenario)}</p><p>${esc(item.predicted_decision)} ${esc(item.predicted_action)}</p><p class="narrative__inner">${esc(item.predicted_thought)}</p>${dialogue}<p>${esc(item.predicted_consequence)}</p><p class="narrative__uncertain">${esc(item.uncertainty_statement)}</p>`;
+  }
+  const simLabel = () => `${tag("generated", `GENERATED · HYPOTHETICAL${ui().simulationMode === "mock" ? " · DEMONSTRATION" : ""}`)}`;
+  const simWarning = () => `<p class="hypothetical-warning"><strong>This never happened.</strong> It is a possible situation the AI produced from its interpretation of you, not a memory and not something you said.</p>`;
   window.renderFiction = () => {
-    const u = state(), item = sessionState.generated.simulation;
-    const label = `<span class="source-label invented"><span aria-hidden="true">!</span>GENERATED${u.simulationMode === "mock" ? " · MOCK DEMONSTRATION" : ""}</span>`;
-    const warning = `<p class="fiction-warning">${core.warning}</p>`;
-    if (!sessionState.consent.fictionalGeneration) return `<h3 class="scene-line">You never told me this.</h3><p>May the system imagine what you might do in a new situation? Its decision, action and inner voice will be invented, not something that happened.</p>${controls(act("allow-simulation", "Allow a hypothetical simulation", true))}`;
-    if (!item) return `<h3 class="scene-line">What might another version of you do?</h3>${warning}${controls(act("generate-simulation", "Create a hypothetical situation", true))}`;
-    if (u.simulationRevision !== revision()) return `${label}<p>Your answers or profile reviews have changed. This simulation is no longer current.</p>${controls(act("generate-simulation", "Generate from my current information", true), act("delete-simulation", "Delete old simulation"))}`;
-    if (u.simulationStep === "scenario") return `${label}${warning}<h3 class="scene-line">${text(item.scenario_title)}</h3><p>${text(item.scenario)}</p><p class="small">You never gave me this situation.</p>${controls(act("reveal-simulation", "Show what you think I would do", true))}`;
-    if (u.simulationStep === "reflection") return `${label}${warning}<h3 class="scene-line">Does this still feel like you?</h3><div class="choice-row">${["Yes", "Partly", "No", "Unsure"].map(v => `<button data-action="feedback-choice" data-field="feelsLikeYou" data-value="${v}" aria-pressed="${sessionState.feedback.feelsLikeYou === v}">${v}</button>`).join("")}</div><label for="finalExplanation">Anything else you want to say?</label><textarea id="finalExplanation" placeholder="Optional">${text(sessionState.feedback.finalExplanation || "")}</textarea>${controls(act("scene-back", "Read the simulation again"))}`;
-    if (u.simulationStep === "review") return `<section class="single-panel simulation-panel">${taskHeader("YOUR REVIEW", 6)}${label}<h3 class="scene-line">Would you actually do this?</h3><div class="choice-row">${["Yes", "Partly", "No", "Unsure"].map(v => `<button data-v6="judge-simulation" data-value="${v}" aria-pressed="${u.simulationFeedback.rating === v}">${v}</button>`).join("")}</div><label for="simulationExplanation">What did the AI misunderstand?</label><textarea id="simulationExplanation" placeholder="Optional">${text(u.simulationFeedback.explanation || "")}</textarea>${u.simulationFeedback.rejected ? '<p class="review-note">You rejected this simulation. It is not treated as information about you.</p>' : ""}${controls(act("reject-simulation", "Reject scene"), act("delete-simulation", "Delete scene"))}</section>`;
-    const narrative = [item.scenario, item.predicted_decision, item.predicted_action, item.predicted_thought, item.predicted_dialogue ? `You might say: "${item.predicted_dialogue}"` : "", item.predicted_consequence, item.uncertainty_statement].filter(Boolean).join(" ");
-    return `<section class="single-panel simulation-panel">${taskHeader("ONE POSSIBLE VERSION OF YOU", 6)}${label}<h3 class="scene-line">This is what I think you would do.</h3><p class="simulation-narrative">${text(narrative)}</p>${controls(act("simulation-evidence", "Why does the AI think this?"), act("delete-simulation", "Delete scene"))}</section>`;
+    const s = sessionState, u = ui(), item = s.generated.simulation;
+    if (!s.consent.fictionalGeneration) return screen("deep", `${head("You never told me this.", { context: "The system can now invent a situation you never described, and predict what you would do in it. The situation, your decision, your inner voice and your words will all be generated." })}
+      ${simWarning()}<p class="hint">Nothing is generated until you allow it.</p>`);
+    if (activeOperations.has("fiction")) return screen("deep", `${head("Imagining another version of you.", { context: "The system is choosing an unfamiliar situation and extending its model of you into it." })}<div class="generating"><div class="pulse-rings" aria-hidden="true"><span></span><span></span><span></span></div><p class="generating__line" role="status">${esc(operationDefinitions.fiction.loading)} ${elapsed("fiction")}</p><p class="hint">This can take up to two minutes.</p></div>`);
+    if (!item) return screen("deep", `${head("What might another version of you do?", { context: "One hypothetical situation, generated from the model's interpretation of you." })}${simWarning()}${notice("fiction", { retry: "", fallback: true })}`);
+    if (u.simulationRevision !== revision()) return screen("deep", `${head("This situation is out of date.", { context: "Your answers or reviews changed after it was generated, so it no longer reflects the current model." })}${simLabel()}${row(act("delete-simulation", "Delete the old situation", "btn-tertiary danger"))}`);
+    if (u.simulationStep === "scenario" || u.simulationStep === "consent") return screen("deep", `${head(esc(item.scenario_title), { meta: "A situation you never described", context: "" })}${simLabel()}
+      <p class="scenario">${esc(item.scenario)}</p>${simWarning()}`);
+    if (u.simulationStep === "review") {
+      const fb = u.simulationFeedback;
+      const choices = ["Yes", "Partly", "No", "Unsure"].map(v => `<button type="button" class="choice" data-v6="judge-simulation" data-value="${v}" aria-pressed="${fb.rating === v}">${v}</button>`).join("");
+      return screen("deep", `${head("Would you actually do this?", { meta: "Your judgement" })}
+        <div class="split split--debate"><section class="side side--model side--generated ${fb.rejected ? "is-rejected" : ""} ${acknowledge === "simulation" ? "is-ack" : ""}">${columnLabel("THE GENERATED YOU")}${fb.rejected ? tag("rejected") : simLabel()}<p class="claim">${esc(item.predicted_decision)} ${esc(item.predicted_action)}</p>${item.predicted_dialogue ? `<p class="hint">You might say, <q>${esc(item.predicted_dialogue.replace(/^["“]|["”]$/g, ""))}</q></p>` : ""}${fb.rejected ? '<p class="revision-note">Rejected. It is not treated as information about you.</p>' : ""}</section>
+        <section class="side side--you">${columnLabel("YOU")}<div class="choices" role="group" aria-label="Would you do this">${choices}</div><div class="inline-field"><label for="simulationExplanation">What did the AI misunderstand? (optional)</label><textarea id="simulationExplanation" placeholder="In your own words…">${esc(fb.explanation || "")}</textarea></div>
+        ${row(act("reject-simulation", fb.rejected ? "Rejected · undo" : "Reject this version of me", "btn-secondary", `aria-pressed="${!!fb.rejected}"`), act("delete-simulation", "Delete it", "btn-tertiary danger"))}</section></div>`);
+    }
+    if (u.simulationStep === "reflection") {
+      const choices = ["Yes", "Partly", "No", "Unsure"].map(v => `<button type="button" class="choice" data-action="feedback-choice" data-field="feelsLikeYou" data-value="${v}" aria-pressed="${s.feedback.feelsLikeYou === v}">${v}</button>`).join("");
+      return screen("final", `${head("Does this still feel like you?", { promptKey: "final-question", meta: "The last question" })}
+        <p class="hint">The situation before this was generated, not remembered.</p><div class="choices choices--large" role="group" aria-label="Does this still feel like you">${choices}</div>
+        <div class="inline-field"><label for="finalExplanation">If you want, say why.</label><textarea id="finalExplanation" placeholder="Optional">${esc(s.feedback.finalExplanation || "")}</textarea></div>`);
+    }
+    return screen("narrative", `<div class="narrative-wrap">${simLabel()}<p class="screen-id"><span class="screen-id__num">06</span>${esc(stages[5][0])}<span class="screen-id__meta">${esc(item.scenario_title)}</span></p>
+      <h2 class="narrative-title">One possible version of you.</h2><article class="narrative">${narrative(item)}</article>${simWarning()}
+      <details class="evidence"><summary>Why does the AI think this?</summary><div class="evidence-body">${simEvidence(item)}</div></details>
+      ${row(act("delete-simulation", "Delete this situation", "btn-tertiary danger"))}</div>`);
   };
   window.generateFiction = async function generateSimulation(forceMock = false) {
     if (!sessionState.consent.fictionalGeneration) return;
@@ -391,22 +453,50 @@
     if (!result || ticket !== generation || original !== sessionState || rev !== revision()) return;
     sessionState.generated.simulation = result;
     sessionState.generated.simulationContext = core.evidenceContext(input);
-    state().simulationMode = forceMock || mockMode ? "mock" : "real";
-    state().simulationRevision = rev; state().simulationStep = "scenario"; state().simulationFeedback = {};
-    state().seenScenarios.push(result.scenario_id);
+    ui().simulationMode = forceMock || mockMode ? "mock" : "real";
+    ui().simulationRevision = rev; ui().simulationStep = "scenario"; ui().simulationFeedback = {};
+    ui().seenScenarios.push(result.scenario_id);
     sessionState.ui.fictionAnswered = false;
     render();
   };
-  const renderSimulationScreen = renderFiction;
-  window.renderFiction = () => {
-    const html = renderSimulationScreen();
-    return html.includes('class="single-panel') ? html : `<section class="single-panel simulation-panel">${taskHeader("A HYPOTHETICAL SITUATION", 6)}${html}</section>`;
+
+  /* ---------- ending + paused ---------- */
+  window.renderDevelopmentStatus = () => {
+    const f = sessionState.feedback;
+    const verdict = f.feelsLikeYou ? (f.feelsLikeYou === "Unsure" ? "You are still deciding." : `You said: ${esc(f.feelsLikeYou.toLowerCase())}.`) : "Only you can decide.";
+    return screen("ending", `<div class="ending"><p class="opening__kicker">THE EXPERIMENT ENDS HERE</p><h2 class="opening__title">${verdict}</h2>
+      <p class="opening__lede">What you supplied, what was inferred and what was invented have stayed separate. Your judgement is not an error to be corrected.</p>
+      ${row(baseAct("view-data", "See what the system held", "btn-secondary"), baseAct("delete-session", "Delete this session", "btn-secondary danger"))}
+      <details class="evidence"><summary>Share optional feedback</summary><div class="evidence-body">
+      ${["Could you tell what you supplied from what the AI created?", "Was the uncertainty language clear?", "Did the questions gradually feel more personal?", "Did you feel in control of your information?"].map((q, i) => `<div class="feedback-row"><p>${q}</p><div class="choices">${["Yes", "Partly", "No"].map(v => `<button type="button" class="choice" data-action="feedback-choice" data-field="rating${i}" data-value="${v}" aria-pressed="${f[`rating${i}`] === v}">${v}</button>`).join("")}</div></div>`).join("")}
+      <div class="field"><label for="boundary">At which stage did the AI's version stop feeling like you?</label><select id="boundary"><option value="">Optional: choose a stage</option>${[...stages.map(st => st[0]), "It never felt like me", "It still feels like me", "I am unsure"].map(v => `<option ${f.boundary === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></div>
+      <div class="field"><label for="unclearLabel">Was any label unclear?</label><textarea id="unclearLabel" rows="2">${esc(f.unclearLabel || "")}</textarea></div></div></details></div>`);
   };
-  window.generateProxyMedia = async () => {
-    if (mockMode) { sessionState.generated.proxyMedia.error = "Mock mode: no recording or portrait was sent to a provider. The response is text only."; render(); return; }
-    if (sessionState.consent.faceAnimation && !state().portraitConfirmed) return status("Confirm your portrait in the permission checkpoint first.", "error");
-    return base.generateProxyMedia();
+  const pausedScreen = () => screen("ending", `<div class="ending"><p class="opening__kicker">PAUSED</p><h2 class="opening__title">You have stepped out.</h2><p class="opening__lede">Your temporary data is still in this browser's memory. Resume where you were, or delete everything.</p>${row(baseAct("resume", "Resume", "btn-primary"), baseAct("delete-session", "Delete session", "btn-secondary danger"))}</div>`);
+
+  /* ---------- presence camera ---------- */
+  window.renderPresenceDock = () => {
+    const slot = document.getElementById("portraitCameraSlot");
+    (slot || dockHome).append(presenceDock);
+    const s = sessionState;
+    const visible = !!slot || s.started && !s.ended && !s.finished && s.currentStage >= 2 && s.currentStage <= 5 && !atCheckpoint();
+    presenceDock.hidden = !visible;
+    shell.classList.toggle("has-camera", visible && !slot && !!cameraStream);
+    presenceDock.classList.toggle("is-portrait", !!slot);
+    const existing = document.getElementById("presenceVideo");
+    if (visible && cameraStream && existing?.srcObject === cameraStream && presenceDock.dataset.mode === String(!!slot)) { existing.play().catch(() => {}); return; }
+    if (existing) { existing.pause(); existing.srcObject = null; existing.load(); }
+    if (!visible) { presenceDock.replaceChildren(); return; }
+    presenceDock.dataset.mode = String(!!slot);
+    const loading = s.operations.camera?.state === "loading";
+    presenceDock.innerHTML = slot
+      ? (cameraStream ? '<video id="presenceVideo" autoplay muted playsinline aria-label="Your live mirrored camera preview for the portrait"></video>' : `<div class="camera-placeholder" role="status">${loading ? "Starting camera…" : "Camera off"}</div>`)
+      : `${cameraStream ? '<video id="presenceVideo" autoplay muted playsinline aria-label="Your live mirrored camera"></video>' : ""}<button type="button" class="dock-switch" data-v6="camera-switch" role="switch" aria-checked="${!!cameraStream}" ${loading ? "disabled" : ""}>${loading ? "Camera…" : `Camera ${cameraStream ? "on" : "off"}`}</button>`;
+    const video = document.getElementById("presenceVideo");
+    if (video && cameraStream) { video.srcObject = cameraStream; video.play().catch(() => {}); }
   };
+
+  /* ---------- operation hooks kept from the integration ---------- */
   window.useOperationFallback = key => {
     if (key === "fiction") return generateFiction(true);
     if (["microphone", "transcription"].includes(key)) {
@@ -416,216 +506,507 @@
     base.useOperationFallback(key);
   };
   window.skipOperation = key => key === "fiction" ? move("skip") : base.skipOperation(key);
-  window.invalidateAnalysis = () => { base.invalidateAnalysis(); state().simulationRevision = ""; };
+  window.invalidateAnalysis = () => { base.invalidateAnalysis(); ui().simulationRevision = ""; };
   window.clearMedia = () => { room.setRecordingStream(null); base.clearMedia(); };
   window.dataItem = (label, value, key, media = "") => {
     const type = key.startsWith("inference:") ? "inferred" : key.startsWith("prediction:") ? "predicted" : key.startsWith("proxy") ? "proxy" : key.startsWith("fiction:") ? "invented"
       : key === "transcript" && sessionState.supplied.transcriptOrigin === "transcribed" ? "transcribed" : "supplied";
-    return source(type) + base.dataItem(label, value, key, media);
+    return source(type) + `<div class="data-item"><strong>${esc(label)}</strong>${media}<p>${esc(value)}</p><button type="button" class="btn-tertiary danger" data-action="delete-item" data-key="${esc(key)}">Delete this item</button></div>`;
   };
   window.renderData = () => {
     base.renderData();
-    if (sessionState.supplied.cloneSample) dataContent.insertAdjacentHTML("beforeend", `${source("supplied", "CLONING SAMPLE")}<audio controls src="${sessionState.supplied.cloneSample.url}"></audio>${controls(act("delete-clone-sample", "Delete voice sample"))}`);
+    if (sessionState.supplied.cloneSample) dataContent.insertAdjacentHTML("beforeend", `<section class="data-section"><h3>Voice sample for cloning</h3>${source("supplied", "CLONING SAMPLE")}<audio controls src="${sessionState.supplied.cloneSample.url}"></audio>${row(act("delete-clone-sample", "Delete voice sample", "btn-tertiary danger"))}</section>`);
     const item = sessionState.generated.simulation;
-    if (item) dataContent.insertAdjacentHTML("beforeend", `${source("invented", "HYPOTHETICAL SIMULATION")}<p>${core.warning}</p>${state().simulationRevision !== revision() ? '<p class="warning">Historical output: your information has changed. Evidence below is the version used when it was generated.</p>' : ''}<p>${text(item.scenario)}</p><p>${text(item.predicted_decision)} ${text(item.predicted_action)} ${text(item.predicted_thought)} ${text(item.predicted_dialogue || "")} ${text(item.predicted_consequence)}</p>${simEvidence(item)}${source("supplied", "YOUR SIMULATION REVIEW")}<p>${text(JSON.stringify(state().simulationFeedback))}</p>${controls(act("delete-simulation", "Delete simulation"))}`);
-    requestAnimationFrame(() => { if (dialog.open) paginate(dataContent, document.getElementById("dataPager")); });
+    if (item) dataContent.insertAdjacentHTML("beforeend", `<section class="data-section"><h3>Hypothetical situation</h3>${source("invented", "HYPOTHETICAL")}<p>${core.warning}</p>${ui().simulationRevision !== revision() ? '<p class="warning">Historical: your information changed after this was generated.</p>' : ""}<div class="narrative narrative--small">${narrative(item)}</div>${ui().simulationFeedback.rating ? `${source("supplied", "YOUR REVIEW")}<p>${esc(ui().simulationFeedback.rating)}${ui().simulationFeedback.rejected ? " · rejected" : ""}${ui().simulationFeedback.explanation ? ` · ${esc(ui().simulationFeedback.explanation)}` : ""}</p>` : ""}${row(act("delete-simulation", "Delete simulation", "btn-tertiary danger"))}</section>`);
   };
+
+  /* ---------- the single forward action ---------- */
+  function forward() {
+    const s = sessionState, u = ui(), stage = s.currentStage;
+    if (!s.started || s.ended || s.finished) return null;
+    if (atCheckpoint()) {
+      const c = s.consent;
+      if (u.consentPage === 0) return { label: "Allow and continue", enabled: true, run: () => { c.proxyResponse = true; travel(() => { u.consentPage = 1; render(); }); }, alt: { label: "Don't let it speak for me", run: skipDouble } };
+      if (u.consentPage === 1) {
+        if (capabilities?.elevenlabs === false) return { label: "Continue with text only", enabled: true, run: () => finishConsent(true) };
+        return { label: "Allow voice cloning", enabled: !!bestVoiceRecording() && !recorder, reason: recorder ? "Stop recording first." : "Record or choose a voice sample first.", run: () => { c.voiceCloning = true; travel(() => { u.consentPage = 2; render(); }); }, alt: { label: "Use text only", run: () => finishConsent(true) } };
+      }
+      if (!c.voiceCloning || capabilities?.did === false) return { label: "Meet your double", enabled: true, run: () => { setFace(false); finishConsent(); } };
+      const noFace = { label: "Continue without a face", run: () => { setFace(false); finishConsent(); } };
+      if (!s.supplied.portrait || u.retakingPortrait) return { label: "Allow animation", enabled: false, reason: "Take your portrait first, or continue without a face.", alt: noFace };
+      if (!u.portraitConfirmed) return { label: "Use this portrait", enabled: true, run: () => { u.portraitConfirmed = true; acknowledge = ""; render(); }, alt: noFace };
+      return { label: "Allow animation and meet your double", enabled: true, run: () => { c.faceAnimation = true; finishConsent(); }, alt: noFace };
+    }
+    if (stage === 1) {
+      if (!s.supplied.image) return { label: "Continue", enabled: false, reason: cameraStream ? "Take the photo, or choose a file instead." : "Choose an image, or skip this step." };
+      if (!s.photoConfirmed) return { label: "Use this image", enabled: true, run: () => { s.photoConfirmed = true; room.react("confirm"); move("continue"); } };
+      return { label: "Continue", enabled: true, run: () => move("continue") };
+    }
+    if (stage === 2) {
+      if (s.supplied.audio && !s.audioConfirmed) return { label: "Use this recording", enabled: !recorder, reason: "Stop recording first.", run: confirmStory };
+      const transcribing = activeOperations.has("transcription");
+      return { label: "Continue", enabled: !!(s.supplied.transcript.trim() || s.audioConfirmed) && !recorder && !transcribing, reason: recorder ? "Stop recording first." : transcribing ? "Transcribing your response…" : "Speak or write a few words, or skip.", run: () => move("continue") };
+    }
+    if (stage === 3) {
+      if (s.questionIndex < questions.length) {
+        const a = s.supplied.answers[s.questionIndex];
+        return { label: s.questionIndex === questions.length - 1 ? "Build my profile" : "Next question", enabled: !!a.text.trim() && !busy && !recorder,
+          reason: recorder ? "Stop recording first." : activeOperations.has("transcription") ? "Transcribing your response…" : a.audio ? "Transcribe or type your answer first." : "Answer by voice or text, or skip this question.",
+          run: () => { room.react("answer"); travel(() => { void advanceQuestion(); }); } };
+      }
+      const p = s.inferred.profile;
+      if (activeOperations.has("identity")) return { label: "Constructing…", enabled: false, reason: "The model is being built from your answers." };
+      if (!p) return { label: s.operations.identity.state === "idle" ? "Build my profile" : "Retry profile", enabled: readableAnswers().some(a => a.id.startsWith("question_")), reason: "Answer at least one question first.", run: () => generateProfile() };
+      if (s.ui.correctingInferenceId) return { label: "Keep correction and continue", enabled: true, run: () => { saveInferenceCorrection(); nextProfilePage(); } };
+      const page = s.ui.profilePage, n = p.inferred_information.length, count = profileReviewCount(p);
+      if (page < count) {
+        const label = page === 0 ? (n ? "Review the first interpretation" : "Continue") : page < n ? "Next interpretation" : page === n ? (p.contradictions.length ? "Confront the contradiction" + (p.contradictions.length > 1 ? "s" : "") : "Continue") : "Next contradiction";
+        return { label, enabled: !busy, run: nextProfilePage };
+      }
+      return { label: "Continue to Stage 4", enabled: !busy, run: () => move("continue") };
+    }
+    if (stage === 4) {
+      if (!s.predictionShown) return { label: activeOperations.has("prediction") ? "Predicting…" : s.operations.prediction.state === "idle" ? "Show its prediction" : "Try again", enabled: !busy, reason: "The model is predicting.", run: () => generatePrediction() };
+      if (!s.ui.predictionCompared) return { label: "Compare our answers", enabled: !!s.predicted.participantAnswers[0]?.text?.trim() && !recorder && !busy, reason: recorder ? "Stop recording first." : "Give your own answer first.", run: () => { room.react("answer"); travel(() => { s.ui.predictionCompared = true; render(); }); } };
+      return { label: "Continue", enabled: !!s.predicted.comparisons[0]?.rating, reason: "Say how close it was first.", run: enterCheckpoint };
+    }
+    if (stage === 5) {
+      const item = s.generated.proxyResponses[0];
+      if (!s.consent.proxyResponse) return { label: "Continue to Stage 6", enabled: true, run: () => move("skip") };
+      if (!item) return { label: activeOperations.has("proxy") ? "The double is answering…" : "Let the double answer", enabled: !busy, reason: "Generating…", run: () => generateProxy() };
+      if (u.proxyView !== "review") return { label: "Would you have said this?", enabled: !busy, reason: "The double is still being created. You can stop waiting and keep what is ready.", run: () => travel(() => { u.proxyView = "review"; render(); }) };
+      if (s.ui.correctingProxy) return { label: "Keep correction", enabled: true, run: saveProxyCorrection };
+      return { label: "Continue to Stage 6", enabled: !!item.feedback, reason: "Accept, correct or reject the response first.", run: () => move("continue") };
+    }
+    const item = s.generated.simulation;
+    if (!s.consent.fictionalGeneration) return { label: "Allow a hypothetical situation", enabled: true, run: () => { s.consent.fictionalGeneration = true; generateFiction(); } };
+    if (activeOperations.has("fiction")) return { label: "Generating…", enabled: false, reason: "Generating a possible scenario." };
+    if (!item) return { label: s.operations.fiction.state === "idle" ? "Create a hypothetical situation" : "Try again", enabled: !busy, run: () => generateFiction() };
+    if (u.simulationRevision !== revision()) return { label: "Generate from my current information", enabled: !busy, run: () => generateFiction() };
+    if (u.simulationStep === "scenario" || u.simulationStep === "consent") return { label: "Show what it thinks I would do", enabled: true, run: () => travel(() => { u.simulationStep = "scene"; room.react("reveal"); render(); }) };
+    if (u.simulationStep === "scene") return { label: "Review this version of me", enabled: true, run: () => travel(() => { u.simulationStep = "review"; render(); }) };
+    if (u.simulationStep === "review") return { label: "The last question", enabled: true, run: () => travel(() => { u.simulationStep = "reflection"; render(); }) };
+    return { label: "Finish", enabled: !!s.feedback.feelsLikeYou, reason: "Choose an answer first, or skip.", run: () => move("continue") };
+  }
+  let currentForward = null;
+  function syncForward() {
+    const f = forward();
+    currentForward = f;
+    forwardButton.hidden = !f;
+    forwardHint.classList.remove("is-error");
+    if (!f) { forwardHint.textContent = ""; return; }
+    const enabled = f.enabled && !transitioning;
+    forwardButton.textContent = f.label;
+    forwardButton.disabled = !enabled;
+    forwardButton.setAttribute("aria-disabled", String(!enabled));
+    forwardHint.textContent = !f.enabled && f.reason ? f.reason : "";
+    forwardAlt.hidden = !f.alt;
+    if (f.alt) { forwardAlt.textContent = f.alt.label; forwardAlt.disabled = transitioning || !!recorder; }
+  }
+  function skipLabel() {
+    const s = sessionState, stage = s.currentStage;
+    if (atCheckpoint()) return "Skip Stage 5";
+    return ({ 1: "Continue without an image", 2: "Skip this step", 3: s.questionIndex < questions.length ? "Skip this question" : "Skip the review", 4: "Skip the prediction", 5: "Skip to Stage 6", 6: "Finish without this" })[stage] || "Skip";
+  }
+  // A second click on a selected verdict takes it back; written explanations are kept as drafts.
+  function undoChoice(button) {
+    const s = sessionState, old = button.dataset.action, v6 = button.dataset.v6;
+    if (old === "review-inference") {
+      if (s.ui.correctingInferenceId === button.dataset.id) s.ui.correctingInferenceId = "";
+      else s.inferred.participantFeedback = s.inferred.participantFeedback.filter(f => f.id !== button.dataset.id);
+    } else if (old === "review-contradiction") {
+      const row = s.inferred.contradictionFeedback.find(r => r.id === button.dataset.id);
+      if (row?.explanation?.trim()) row.verdict = ""; else s.inferred.contradictionFeedback = s.inferred.contradictionFeedback.filter(r => r.id !== button.dataset.id);
+    } else if (old === "rate-prediction") s.predicted.comparisons = [{ rating: "", explanation: s.predicted.comparisons[0]?.explanation || "" }];
+    else if (["review-proxy", "reject-proxy", "correct-proxy"].includes(old)) {
+      if (old === "correct-proxy" && s.ui.correctingProxy) s.ui.correctingProxy = false;
+      else s.generated.proxyResponses[0].feedback = "";
+    } else if (v6 === "judge-simulation") delete ui().simulationFeedback.rating;
+    else if (old === "feedback-choice") { delete s.feedback[button.dataset.field]; if (button.dataset.field === "feelsLikeYou") s.ui.fictionAnswered = false; }
+    status("Choice removed.");
+  }
+  function nextProfilePage() { travel(() => { sessionState.ui.profilePage += 1; render(); }); }
+  function saveInferenceCorrection() {
+    const s = sessionState, id = s.ui.correctingInferenceId, value = document.getElementById("inferenceCorrection")?.value?.trim();
+    if (value) { s.inferred.participantFeedback = s.inferred.participantFeedback.filter(f => f.id !== id); s.inferred.participantFeedback.push({ id, verdict: "corrected", correction: value }); room.react("revise"); }
+    s.ui.correctingInferenceId = ""; drafts.delete("inferenceCorrection");
+  }
+  function saveProxyCorrection() {
+    const value = document.getElementById("proxyCorrection")?.value?.trim();
+    if (!value) return status("Write your correction first, or cancel.", "error");
+    const item = sessionState.generated.proxyResponses[0];
+    item.feedback = "corrected"; item.correction = value; sessionState.ui.correctingProxy = false; drafts.delete("proxyCorrection");
+    acknowledge = "proxy"; room.react("revise"); render();
+  }
+  function confirmStory() {
+    const s = sessionState;
+    s.audioConfirmed = true; render();
+    if (s.consent.transcription && !s.supplied.transcript.trim()) void transcribeCurrent("story");
+  }
+  function setFace(value) { sessionState.consent.faceAnimation = value; if (!value) clearAvatarVideo(); }
+  function finishConsent(textOnly = false) {
+    const s = sessionState, c = s.consent, u = ui();
+    if (textOnly) { c.proxyResponse = true; c.voiceCloning = false; setFace(false); clearProxyMedia(); }
+    if (c.faceAnimation && (!c.voiceCloning || !s.supplied.portrait || !u.portraitConfirmed)) setFace(false);
+    if (!c.voiceCloning) clearProxyMedia();
+    travel(() => { u.checkpoint = false; u.proxyView = "response"; render(); }, 1, markerFor(5));
+  }
+  function enterCheckpoint() {
+    travel(() => { if (busy) cancelActiveOperations(); sessionState.currentStage = 5; Object.assign(ui(), { checkpoint: true, consentPage: 0 }); render(); }, 1, { num: "05", title: "THRESHOLD" });
+  }
+  function skipDouble() {
+    if (busy) cancelActiveOperations();
+    travel(() => { ui().checkpoint = false; sessionState.currentStage = 6; stopCamera(); sessionState.consent.cameraPresence = false; render(); }, 1, markerFor(6));
+  }
+  const markerFor = stage => ({ num: pad(stage), title: stages[stage - 1][0] });
+
+  /* ---------- vertical travel: forward descends, back ascends ---------- */
+  function cancelTransition() {
+    transitionTicket++; transitioning = false; document.body.classList.remove("is-passing");
+    stageElement.getAnimations().forEach(a => a.cancel());
+    marker.getAnimations({ subtree: true }).forEach(a => a.cancel());
+    marker.hidden = true; marker.classList.remove("is-active");
+    room.cancelTravel(); syncForward();
+  }
+  async function travel(change, direction = 1, stageMarker = null) {
+    if (transitioning) return;
+    transitioning = true;
+    const ticket = ++transitionTicket;
+    const depthStage = stageMarker ? Math.max(1, Number(stageMarker.num) || 5) : sessionState.currentStage || 1;
+    // Between stages (and on entering) the passage lingers in an empty gap so the tunnel can bloom;
+    // steps inside a stage stay short and quiet.
+    const passage = !!stageMarker;
+    // Passages grow more complex (and a little longer) the deeper the destination:
+    // into Stage 1 is a plain tunnel; into Stage 6 is the fullest sequence.
+    const destination = !passage ? 0 : stageMarker.title === "THRESHOLD" ? 4.5 : Number(stageMarker.num) || 1;
+    // Eased so the light stages stay simple; Stage 6 gets the fullest sequence.
+    const complexity = passage ? ({ 1: 0, 2: .12, 3: .25, 4: .42, 4.5: .52, 5: .6, 6: .8 })[destination] ?? 0 : 0;
+    const gap = passage ? Math.round(380 + complexity * 1250) : 0, arrive = passage ? Math.round(600 + complexity * 500) : 440;
+    // The atmosphere overlay steps back during a stage passage so the tunnel itself is seen.
+    document.body.classList.toggle("is-passing", passage && !room.reduced);
+    room.travel(direction, passage ? 1 + complexity * .6 : .45 + depthStage * .12, passage ? { burst: true, duration: (480 + gap + 160) / 1000, complexity } : {});
+    document.getElementById("sessionMenu").open = false;
+    syncForward();
+    const quiet = room.reduced;
+    const distance = Math.min(240, Math.max(120, innerHeight * .22));
+    try {
+      // The stage number rises through the gap between screens; it overlaps rather than adds time.
+      const markerDone = stageMarker && !quiet ? showMarker(stageMarker, direction, ticket, 300 + gap + 520 + complexity * 300) : null;
+      if (!quiet) await stageElement.animate([{ opacity: 1, transform: "none", filter: "blur(0)" }, { opacity: 0, transform: `translateY(${-direction * distance}px) scale(${direction > 0 ? .97 : 1.03})`, filter: "blur(5px)" }], { duration: passage ? 480 : 320, easing: "cubic-bezier(.55,0,.8,.2)", fill: "forwards" }).finished;
+      if (ticket !== transitionTicket) return;
+      if (passage && !quiet) { await new Promise(r => setTimeout(r, gap)); if (ticket !== transitionTicket) return; }
+      change();
+      stageElement.scrollTop = 0;
+      stageElement.getAnimations().forEach(a => a.cancel());
+      if (!quiet) await stageElement.animate([{ opacity: 0, transform: `translateY(${direction * distance}px) scale(${direction > 0 ? 1.03 : .97})`, filter: "blur(5px)" }, { opacity: 1, transform: "none", filter: "blur(0)" }], { duration: arrive, easing: "cubic-bezier(.15,.75,.25,1)", fill: "backwards" }).finished;
+      await markerDone;
+    } catch { /* End/Delete cancels the passage immediately. */ }
+    finally {
+      if (ticket === transitionTicket) {
+        document.body.classList.remove("is-passing");
+        transitioning = false; syncForward();
+        const heading = stageElement.querySelector(".screen-title,.opening__title,.narrative-title");
+        if (heading && !stageElement.contains(document.activeElement)) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
+      }
+    }
+  }
+  async function showMarker({ num, title }, direction, ticket, duration = 1500) {
+    marker.querySelector(".stage-marker__num").textContent = num;
+    marker.querySelector(".stage-marker__title").textContent = title;
+    marker.setAttribute("aria-label", `${direction > 0 ? "Descending to" : "Returning to"} ${title}`);
+    // The number is drawn against the screen being left: dark type on the light stages, glowing on the deep ones.
+    marker.dataset.tone = ["opening", "1", "2"].includes(document.body.dataset.depth) ? "light" : "dark";
+    marker.hidden = false; marker.classList.add("is-active");
+    const content = marker.querySelector(".stage-marker");
+    try {
+      await content.animate([{ opacity: 0, transform: `translateY(${direction * 46}px)`, filter: "blur(6px)" }, { opacity: 1, transform: "none", filter: "blur(0)", offset: .4 }, { opacity: 1, transform: "none", offset: .62 }, { opacity: 0, transform: `translateY(${-direction * 34}px)`, filter: "blur(4px)" }], { duration, delay: 260, easing: "ease-in-out" }).finished;
+    } finally { if (ticket === transitionTicket) { marker.hidden = true; marker.classList.remove("is-active"); } }
+  }
   window.move = direction => {
-    if (sessionState.ended || transitioning) return;
+    const s = sessionState, u = ui();
+    if (s.ended || transitioning) return;
     if (recorder) return status("Stop recording first so your voice answer is saved.", "error");
-    if (!sessionState.started) { if (direction === "continue") begin(); return; }
-    if (state().checkpoint) {
-      if (direction === "back") return travel(() => { if (state().consentPage > 0) state().consentPage--; else { state().checkpoint = false; sessionState.currentStage = 4; } render(); }, -1);
+    if (!s.started) { if (direction === "continue") begin(); return; }
+    if (s.finished) { if (direction === "back") travel(() => base.move("back"), -1, markerFor(6)); return; }
+    const stage = s.currentStage;
+    if (atCheckpoint()) {
       if (direction === "skip") return skipDouble();
+      if (direction === "back") return travel(() => { if (u.consentPage > 0) u.consentPage--; else { u.checkpoint = false; s.currentStage = 4; } render(); }, -1, u.consentPage === 0 ? markerFor(4) : null);
       return;
     }
-    if (direction === "back" && sessionState.currentStage === 5 && state().proxyView === "review") return travel(() => { state().proxyView = "response"; render(); }, -1);
-    if (direction === "back" && sessionState.currentStage === 6 && sessionState.generated.simulation) {
-      const steps = ["scenario", "scene", "review", "reflection"], index = steps.indexOf(state().simulationStep);
-      if (index > 0) return travel(() => { state().simulationStep = steps[index - 1]; render(); }, -1);
+    if (direction === "back") {
+      if (stage === 5 && u.proxyView === "review") return travel(() => { u.proxyView = "response"; render(); }, -1);
+      if (stage === 5) return travel(() => { if (busy) cancelActiveOperations(); u.checkpoint = true; u.consentPage = 2; render(); }, -1, { num: "05", title: "THRESHOLD" });
+      if (stage === 6 && s.generated.simulation) {
+        const steps = ["scenario", "scene", "review", "reflection"], index = steps.indexOf(u.simulationStep);
+        if (index > 0) return travel(() => { u.simulationStep = steps[index - 1]; render(); }, -1);
+      }
+      if (stage === 6) return travel(() => { s.currentStage = 5; u.proxyView = s.generated.proxyResponses.length ? "review" : "response"; render(); }, -1, markerFor(5));
+      if (stage === 4 && s.ui.predictionCompared) return travel(() => { s.ui.predictionCompared = false; render(); }, -1);
+      if (stage === 3 && s.questionIndex >= questions.length && s.ui.profilePage > 0) return travel(() => { s.ui.profilePage--; render(); }, -1);
     }
-    if (direction === "continue" && currentPage < pages.length - 1) return travel(() => stagePages?.show(currentPage + 1));
-    if (direction === "back" && currentPage > 0) return travel(() => stagePages?.show(currentPage - 1), -1);
-    if (direction === "back" && sessionState.currentStage === 3 && sessionState.questionIndex >= questions.length && sessionState.ui.profilePage > 0) return travel(() => { sessionState.ui.profilePage--; render(); }, -1);
-    if (sessionState.currentStage === 4 && direction !== "back") return travel(() => { if (busy) cancelActiveOperations(); sessionState.currentStage = 5; state().checkpoint = true; state().consentPage = 0; render(); });
-    travel(() => base.move(direction), direction === "back" ? -1 : 1);
+    if (stage === 4 && direction !== "back") return enterCheckpoint();
+    const changesStage = direction === "back" ? stage > 1 && !(stage === 3 && s.questionIndex > 0) : !(stage === 3 && s.questionIndex < questions.length) && stage < 6;
+    const blocked = direction === "continue" && (stage === 1 && s.supplied.image && !s.photoConfirmed || stage === 2 && s.supplied.audio && !s.audioConfirmed);
+    if (blocked) return base.move(direction);
+    travel(() => base.move(direction), direction === "back" ? -1 : 1, changesStage ? markerFor(stage + (direction === "back" ? -1 : 1)) : null);
   };
   function begin() {
-    state().entry = "tunnel";
-    render();
-    room.enter(document.body, enterExperience);
-    stageElement.focus({ preventScroll: true });
+    travel(() => { sessionState.started = true; sessionState.currentStage = 1; render(); }, 1, markerFor(1));
   }
-  function enterExperience() {
-    room.leaveTunnel();
-    travel(() => { state().entry = "complete"; sessionState.started = true; sessionState.currentStage = 1; render(); });
+
+  /* ---------- render wrapper ---------- */
+  function screenKey() {
+    const s = sessionState, u = ui();
+    return [s.started, s.ended, s.finished, s.currentStage, s.questionIndex, s.ui.profilePage, s.ui.predictionCompared, s.predictionShown, u.checkpoint, u.consentPage, u.simulationStep, u.proxyView, !!s.generated.proxyResponses.length, !!s.generated.simulation, !!s.inferred.profile].join("|");
   }
-  function skipDouble() { if (busy) cancelActiveOperations(); travel(() => { state().checkpoint = false; sessionState.currentStage = 6; stopCamera(); sessionState.consent.cameraPresence = false; render(); }); }
-  function finishConsent(textOnly = false) {
-    if (textOnly) { sessionState.consent.proxyResponse = true; sessionState.consent.voiceCloning = false; sessionState.consent.faceAnimation = false; clearProxyMedia(); }
-    if (!sessionState.consent.proxyResponse) return status("Choose an AI answer, use text only, or skip Stage 5.", "error");
-    if (sessionState.consent.voiceCloning && !bestVoiceRecording()) { state().consentPage = 1; render(); return status("Record a sample, or turn off cloning to continue with text.", "error"); }
-    if (sessionState.consent.faceAnimation && (!sessionState.consent.voiceCloning || !sessionState.supplied.portrait || !state().portraitConfirmed)) return status("Animation needs a confirmed portrait and separately permitted cloned audio. You can turn animation off.", "error");
-    travel(() => { state().checkpoint = false; state().proxyView = "response"; sessionState.currentStage = 5; render(); });
+  // Re-rendering replaces nodes; return keyboard focus to the equivalent control.
+  function captureFocus() {
+    const el = document.activeElement;
+    if (!el || !stageElement.contains(el)) return null;
+    if (el.id) return { selector: `#${CSS.escape(el.id)}`, start: el.selectionStart, end: el.selectionEnd };
+    const keys = ["action", "v6", "verdict", "value", "id", "operation"].filter(k => el.dataset?.[k]).map(k => `[data-${k}="${CSS.escape(el.dataset[k])}"]`).join("");
+    return keys ? { selector: keys } : null;
+  }
+  // Keep playing media alive across re-renders of the same screen.
+  function captureMedia() {
+    return [...stageElement.querySelectorAll("audio[src],video[src]")].filter(m => !m.paused || m.currentTime > 0).map(m => [m.getAttribute("src"), m]);
+  }
+  function restoreMedia(list) {
+    for (const [src, old] of list) {
+      const fresh = [...stageElement.querySelectorAll("audio[src],video[src]")].find(m => m.getAttribute("src") === src);
+      if (fresh) fresh.replaceWith(old);
+    }
+  }
+  // Rail positions: stages 1-6, with the threshold at 4.5. Any position already reached is a link.
+  const railPosition = () => { const s = sessionState; return !s.started ? 0 : s.finished ? 7 : atCheckpoint() ? 4.5 : s.currentStage; };
+  function renderRail() {
+    const s = sessionState, u = ui(), list = document.getElementById("progressSteps");
+    const here = railPosition();
+    u.reached = Math.max(u.reached || 0, Math.min(6, here));
+    const link = (pos, num, label, extra = "") => {
+      const isHere = pos === here, open = pos <= u.reached && !isHere;
+      const name = `${pos === 4.5 ? "Threshold: permissions" : `Stage ${num}: ${label}`}${isHere ? " (you are here)" : open ? "" : " (not reached yet)"}`;
+      return `<button type="button" class="rail-link" data-v6="jump" data-pos="${pos}" ${open ? "" : "disabled"} ${isHere ? 'aria-current="step"' : ""} aria-label="${esc(name)}">${extra}<span class="rail-node" aria-hidden="true"></span><span class="rail-label">${esc(label)}</span></button>`;
+    };
+    const items = stages.map((st, i) => {
+      const n = i + 1, state = s.finished || n < here ? "done" : n === here ? "current" : "";
+      const threshold = n === 5 ? `<li class="rail-threshold ${here === 4.5 ? "current" : here > 4.5 ? "done" : ""}">${link(4.5, "", "THRESHOLD")}</li>` : "";
+      return `${threshold}<li class="${state}">${link(n, pad(n), st[0], `<span class="rail-num" aria-hidden="true">${pad(n)}</span>`)}</li>`;
+    });
+    list.innerHTML = items.join("");
+    document.getElementById("progressName").textContent = !s.started || s.finished ? "" : atCheckpoint() ? "THRESHOLD · BEFORE THE DOUBLE" : `${pad(s.currentStage)} · ${stages[s.currentStage - 1][0]}`;
+  }
+  // Jump to a stage already reached, travelling up or down through the tunnel. Nothing is erased.
+  function jumpTo(pos) {
+    const s = sessionState, u = ui(), here = railPosition();
+    if (transitioning || !s.started || s.ended || pos === here || pos > (u.reached || 0)) return;
+    if (recorder) return status("Stop recording first so your voice answer is saved.", "error");
+    const marker = pos === 4.5 ? { num: "05", title: "THRESHOLD" } : markerFor(pos);
+    travel(() => {
+      if (busy) cancelActiveOperations("You moved to another stage. Everything already made is kept.");
+      s.finished = false;
+      if (pos === 4.5) { s.currentStage = 5; Object.assign(u, { checkpoint: true, consentPage: 0 }); }
+      else {
+        u.checkpoint = false; s.currentStage = pos;
+        if (pos === 3) { s.questionIndex = s.inferred.profile ? questions.length : 0; s.ui.profilePage = 0; }
+        // Stage 5 opens on the double only once its permissions were answered; otherwise on the threshold.
+        if (pos === 5) { if (s.consent.proxyResponse || s.generated.proxyResponses.length) u.proxyView = "response"; else Object.assign(u, { checkpoint: true, consentPage: 0 }); }
+      }
+      if (s.currentStage === 6) { stopCamera(); s.consent.cameraPresence = false; }
+      render();
+    }, pos > here ? 1 : -1, marker);
+  }
+  // Two or more consecutive labels (column label, source tags, demonstration tag) share one row.
+  function groupLabels(root) {
+    const lone = el => el?.matches("p") && el.children.length === 1 && el.firstElementChild.matches(".tag") && el.textContent.trim() === el.firstElementChild.textContent.trim();
+    root.querySelectorAll(".tag,.column-label").forEach(el => {
+      if (el.parentElement.classList.contains("tag-row")) return;
+      const start = lone(el.parentElement) ? el.parentElement : el, run = [start];
+      for (let n = start.nextElementSibling; n && (n.matches(".tag") || lone(n)); n = n.nextElementSibling) run.push(n);
+      if (run.length < 2) return;
+      const row = document.createElement("div"); row.className = "tag-row"; start.before(row);
+      run.forEach(node => { row.append(lone(node) ? node.firstElementChild : node); if (lone(node) || node.matches("p:empty")) node.remove(); });
+    });
   }
   window.render = () => {
-    const u = state();
-    if (sessionState.started && u.entry === "title") u.entry = "complete";
-    const tick = ++renderTick;
-    // The portrait setup temporarily hosts the one camera dock; retain it across renders.
-    if (stageElement.contains(presenceDock)) shell.append(presenceDock);
+    const s = sessionState, u = ui();
+    const focus = captureFocus(), media = captureMedia();
+    stageElement.querySelectorAll("textarea[id]").forEach(f => { if (["inferenceCorrection", "proxyCorrection"].includes(f.id)) drafts.set(f.id, f.value); });
+    if (stageElement.contains(presenceDock)) dockHome.append(presenceDock);
     const oldCapture = document.getElementById("cameraVideo");
     if (oldCapture) { oldCapture.pause(); oldCapture.srcObject = null; oldCapture.load(); }
     base.render();
-    const task = stageElement.querySelector(".question-panel,.debate-panel,.proxy-panel,.simulation-panel");
-    shell.classList.toggle("is-task", !!task);
-    if (task) stageElement.querySelectorAll(":scope > .stage-kicker,:scope > .stage-title").forEach(el => el.remove());
-    const prediction = stageElement.querySelector(".prediction-solo");
-    const answer = stageElement.querySelector(".answer-moment");
-    if (prediction && answer && !answer.querySelector(".source-label")) answer.insertAdjacentHTML("afterbegin", source("supplied", "YOUR ACTUAL CHOICE"));
-    if (prediction && answer && innerWidth >= 900 && innerHeight >= 600) {
-      const pair = document.createElement("section"); pair.className = "prediction-pair";
-      prediction.before(pair); pair.append(prediction, answer);
-    }
-    shell.classList.toggle("is-checkpoint", u.checkpoint && sessionState.currentStage === 5);
+    if (s.ended) stageElement.innerHTML = pausedScreen();
+    restoreMedia(media);
+    groupLabels(stageElement);
+    const key = screenKey();
+    const settled = key === lastScreenKey;
+    lastScreenKey = key;
+    stageElement.querySelector(".screen")?.classList.toggle("is-settled", settled);
+    const depth = !s.started ? "opening" : s.ended ? "paused" : s.finished ? "ending" : atCheckpoint() ? "threshold" : String(s.currentStage);
+    shell.dataset.stage = depth;
+    shell.dataset.depth = depth;
+    shell.classList.toggle("has-rail", s.started && !s.finished && !s.ended);
+    document.body.dataset.depth = depth;
+    renderRail();
+    const nav = document.querySelector(".navigation");
+    nav.hidden = !s.started || s.ended || s.finished;
+    // move() already ignores input mid-passage; don't leave Back disabled after a render inside one.
+    backButton.disabled = s.ended || !s.started || (!s.finished && s.currentStage === 1 && !atCheckpoint());
+    skipButton.textContent = skipLabel();
+    skipButton.disabled = s.ended || s.finished || !s.started || (s.currentStage === 6 && !!s.feedback.feelsLikeYou);
     document.getElementById("recordingIndicator").hidden = !recorder;
-    const claim = document.getElementById("claimContext");
-    claim.hidden = sessionState.currentStage !== 6 || !sessionState.started || sessionState.finished || sessionState.ended;
-    claim.textContent = claim.hidden ? "" : `GENERATED${u.simulationMode === "mock" ? " / MOCK" : ""} · ${core.warning}`;
-    if (u.checkpoint && sessionState.currentStage === 5) { document.querySelector(".navigation [data-action=continue]").disabled = true; stageElement.querySelectorAll(".stage-kicker,.stage-title").forEach((el, index) => { if (index < 2) el.remove(); }); }
-    continueAllowed = !document.querySelector('.navigation [data-action="continue"]').disabled;
-    continueCaption = document.querySelector('.navigation [data-action="continue"]').textContent;
-    prepareForward();
-    if (!sessionState.started && u.entry === "tunnel" && !sessionState.ended) {
-      stageElement.innerHTML = `<section class="tunnel-copy"><h2>Venture into the space<br>between you and another you.</h2><p>${room.reduced ? "Explore at your own pace. Reduced motion is on." : "Scroll to go deeper. Where will you end and the double begin?"}</p><div class="tunnel-meter" aria-hidden="true"><span id="tunnelDepth"></span></div>${controls(act("enter", "Enter experience", true))}</section>`;
-    }
-    shell.classList.toggle("is-tunnel", u.entry === "tunnel" && !sessionState.started);
-    room.setScene(sessionState.started ? sessionState.currentStage : 0, sessionState.currentStage === 4 ? sessionState.predictionShown : sessionState.currentStage === 5 && !u.checkpoint && !!sessionState.generated.proxyResponses.length);
+    room.setScene(s.started && !s.finished ? s.currentStage : s.finished ? 6 : 0,
+      s.currentStage === 4 ? s.predictionShown : s.currentStage === 5 && !u.checkpoint && !!s.generated.proxyResponses.length, atCheckpoint());
     room.setRecordingStream(recorder ? micStream : null);
-    room.reduce(room.reduced);
-    restoreDrafts();
-    stageElement.querySelectorAll('[data-v6="generate-simulation"],[data-v6="allow-simulation"],[data-v6="retry-media"]').forEach(button => { button.disabled = busy; });
-    pageKey = signature();
-    // Hide optional fallback buttons until a failure or developer mode needs them.
-    if (!developerMode && !mockMode) stageElement.querySelectorAll('[data-action^="mock-"]').forEach(el => el.remove());
-    requestAnimationFrame(() => {
-      if (tick !== renderTick) return;
-      if (u.entry === "tunnel" && !sessionState.started) { pager.hidden = true; return; }
-      const result = paginate(stageElement, pager, pageMemory.get(pageKey) || 0);
-      stagePages = result;
-      if (focusAfterRender) {
-        const field = document.getElementById(focusAfterRender); focusAfterRender = "";
-        const index = result.sheets.findIndex(s => s.contains(field));
-        if (index >= 0) { result.show(index); field.focus({ preventScroll: true }); }
-      }
-    });
+    for (const [id, value] of drafts) { const f = document.getElementById(id); if (f && !f.value) f.value = value; }
+    if (focusAfterRender) { const f = document.getElementById(focusAfterRender); focusAfterRender = ""; f?.focus({ preventScroll: false }); }
+    else if (focus) { const f = stageElement.querySelector(focus.selector); if (f) { f.focus({ preventScroll: true }); try { if (focus.start != null) f.setSelectionRange(focus.start, focus.end); } catch { /* not a text field */ } } }
+    if (cameraStream) { const v = document.getElementById("cameraVideo"); if (v && v.srcObject !== cameraStream) { v.srcObject = cameraStream; v.play().catch(() => {}); } }
+    acknowledge = "";
+    syncForward();
+    if (recorder) drawWave();
   };
-  document.addEventListener("toggle", event => {
-    const detail = event.target;
-    if (detail.tagName !== "DETAILS" || !detail.open || !stageElement.contains(detail)) return;
-    const title = detail.querySelector("summary")?.textContent || "More information";
-    const copy = detail.cloneNode(true); copy.querySelector("summary")?.remove(); detail.open = false;
-    openReader(title, copy.innerHTML);
-  }, true);
+
+  /* ---------- recorder waveform and elapsed timers ---------- */
+  function drawWave() {
+    cancelAnimationFrame(waveFrame);
+    const step = () => {
+      const canvas = document.getElementById("recWave");
+      if (!canvas || !recorder) return;
+      const ctx = canvas.getContext("2d"), data = room.waveform(), w = canvas.width, h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = "#78a9ff";
+      const bars = 40;
+      for (let i = 0; i < bars; i++) {
+        const v = data ? Math.abs(data[Math.floor(i / bars * data.length)] - 128) / 128 : 0;
+        const bh = Math.max(2, Math.min(h, v * h * 2.4));
+        ctx.globalAlpha = .45 + v;
+        ctx.fillRect(i * (w / bars) + 1, (h - bh) / 2, w / bars - 3, bh);
+      }
+      ctx.globalAlpha = 1;
+      if (!room.reduced) waveFrame = requestAnimationFrame(step);
+    };
+    step();
+  }
+  setInterval(() => {
+    document.querySelectorAll(".elapsed[data-since]").forEach(el => {
+      const sec = Math.max(0, Math.floor((Date.now() - Number(el.dataset.since)) / 1000));
+      el.textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+    });
+  }, 1000);
+
+  /* ---------- events ---------- */
   document.addEventListener("input", event => {
-    if (event.target.tagName === "TEXTAREA") drafts.set(`${signature()}|${event.target.id}`, event.target.value);
-    if (event.target.id === "simulationExplanation") state().simulationFeedback.explanation = event.target.value;
-    if (event.target.id === "contradictionExplanation") {
-      const index = sessionState.ui.profilePage - sessionState.inferred.profile.inferred_information.length - 1;
-      const id = contradictionId(index);
-      if (!sessionState.inferred.contradictionFeedback.some(row => row.id === id) && event.target.value.trim()) sessionState.inferred.contradictionFeedback.push({ id, verdict: "context-needed", explanation: event.target.value });
+    const s = sessionState, id = event.target.id;
+    if (id === "simulationExplanation") ui().simulationFeedback.explanation = event.target.value;
+    if (id === "contradictionExplanation" && s.inferred.profile) {
+      const index = s.ui.profilePage - s.inferred.profile.inferred_information.length - 1, cid = contradictionId(index);
+      if (!s.inferred.contradictionFeedback.some(r => r.id === cid) && event.target.value.trim()) s.inferred.contradictionFeedback.push({ id: cid, verdict: "context-needed", explanation: event.target.value });
     }
-    if (!forwardSource) continueAllowed = !document.querySelector('.navigation [data-action="continue"]').disabled;
+    if (["inferenceCorrection", "proxyCorrection"].includes(id)) drafts.set(id, event.target.value);
     syncForward();
   });
   document.addEventListener("change", event => {
-    if (event.target.dataset.consent) {
-      const key = event.target.dataset.consent;
-      if (busy) cancelActiveOperations("Permissions changed; unfinished generation stopped.");
-      sessionState.consent[key] = event.target.checked;
-      if (key === "voiceCloning" && !event.target.checked) { sessionState.consent.faceAnimation = false; clearProxyMedia(); }
-      if (key === "faceAnimation" && !event.target.checked) clearAvatarVideo();
-      render();
-    }
     if (event.target.id === "voiceSample") { sessionState.ui.selectedVoiceTarget = event.target.value; clearProxyMedia(); render(); }
   });
   document.addEventListener("click", async event => {
-    const button = event.target.closest("button,[data-action]");
+    const button = event.target.closest("button,[data-action],summary");
     if (!button) return;
-    const action = button.dataset.v6, old = button.dataset.action;
-    captureDrafts();
-    if (old === "continue" && button.closest(".navigation") && forwardSource && currentPage === pages.length - 1) {
-      event.stopImmediatePropagation();
-      if (!transitioning && !busy && !recorder && !forwardSource.disabled) forwardSource.click();
-      return;
-    }
-    if (["next-question", "next-profile-item", "previous-profile-item", "compare-prediction"].includes(old)) {
-      event.stopImmediatePropagation();
-      if (recorder || transitioning || busy) return;
-      if (old === "next-question") { room.react("answer"); return travel(() => { void advanceQuestion(); }); }
-      if (old === "compare-prediction") return travel(() => { sessionState.ui.predictionCompared = true; render(); });
-      return travel(() => { sessionState.ui.profilePage += old === "previous-profile-item" ? -1 : 1; render(); }, old === "previous-profile-item" ? -1 : 1);
-    }
-    if (old === "confirm-image") room.react("confirm");
-    if (old === "switch-input" && button.dataset.mode === "type") focusAfterRender = button.dataset.target === "story" ? "storyText" : button.dataset.target === "prediction-answer" ? "actualAnswer" : "questionText";
-    if (old === "review-inference" && button.dataset.verdict === "corrected") focusAfterRender = "inferenceCorrection";
-    if (old === "correct-proxy") focusAfterRender = "proxyCorrection";
-    if (old === "feedback-choice" && reader.open) queueMicrotask(() => reader.querySelectorAll('[data-action="feedback-choice"]').forEach(choice => choice.setAttribute("aria-pressed", String(sessionState.feedback[choice.dataset.field] === choice.dataset.value))));
-    if (["next-question", "compare-prediction"].includes(old)) room.react("answer");
-    if (["review-inference", "review-contradiction", "save-inference-correction"].includes(old)) room.react("revise");
-    if (["end", "delete-session"].includes(old)) {
-      cancelTransition(); room.setRecordingStream(null); reader.close();
-      if (old === "delete-session") { event.stopImmediatePropagation(); base.deleteSession(); if (!sessionState.started) { pageMemory.clear(); drafts.clear(); revealedPrompts.clear(); room.reset(); render(); } }
-      return;
-    }
-    if (old === "generate-proxy" && !sessionState.consent.proxyResponse) { event.stopImmediatePropagation(); state().checkpoint = true; render(); return; }
-    if (["generate-proxy", "delete-proxy"].includes(old)) state().proxyView = "response";
-    if (old === "resume" && !sessionState.started && state().entry === "tunnel") queueMicrotask(() => room.enter(document.body, enterExperience));
+    const s = sessionState, u = ui(), action = button.dataset.v6, old = button.dataset.action;
+    if (button.closest("#sessionMenu") && button.tagName === "BUTTON") document.getElementById("sessionMenu").open = false;
     if (button.id === "motionToggle") {
       event.stopImmediatePropagation(); room.reduce(!room.reduced);
-      if (room.reduced) stageElement.getAnimations().forEach(animation => animation.finish());
+      if (room.reduced) [...stageElement.getAnimations(), ...marker.getAnimations({ subtree: true })].forEach(a => a.finish());
       return;
     }
+    if (["end", "delete-session"].includes(old)) {
+      cancelTransition(); room.setRecordingStream(null);
+      if (old === "delete-session") {
+        event.stopImmediatePropagation(); base.deleteSession();
+        if (!s.started || sessionState !== s) { drafts.clear(); revealedPrompts.clear(); lastScreenKey = ""; room.reset(); render(); }
+      }
+      return;
+    }
+    if (old === "allow-transcription" && s.currentStage === 2 && s.supplied.audio) s.audioConfirmed = true;
+    if (button.classList.contains("choice") && button.getAttribute("aria-pressed") === "true") {
+      event.preventDefault(); event.stopImmediatePropagation(); undoChoice(button); render(); return;
+    }
+    if (old === "review-inference" && button.dataset.verdict !== "corrected") s.ui.correctingInferenceId = "";
+    if (["review-proxy", "reject-proxy"].includes(old)) s.ui.correctingProxy = false;
+    if (old === "review-questions") { event.stopImmediatePropagation(); return travel(() => { s.questionIndex = 0; render(); }, -1); }
+    if (old === "review-inference") { acknowledge = button.dataset.id; if (button.dataset.verdict === "corrected") focusAfterRender = "inferenceCorrection"; else room.react("revise"); }
+    if (old === "save-inference-correction") { event.stopImmediatePropagation(); acknowledge = s.ui.correctingInferenceId; const before = document.getElementById("inferenceCorrection")?.value?.trim(); if (!before) return status("Write your correction first, or cancel.", "error"); saveInferenceCorrection(); render(); return; }
+    if (old === "cancel-inference-correction") drafts.delete("inferenceCorrection");
+    if (old === "review-contradiction") { acknowledge = button.dataset.id; room.react("revise"); }
+    if (["review-proxy", "reject-proxy"].includes(old)) { acknowledge = "proxy"; room.react(old === "reject-proxy" ? "reject" : "revise"); }
+    if (old === "correct-proxy") focusAfterRender = "proxyCorrection";
+    if (old === "save-proxy-correction") { event.stopImmediatePropagation(); return saveProxyCorrection(); }
+    if (old === "cancel-proxy-correction") drafts.delete("proxyCorrection");
+    if (old === "delete-proxy") u.proxyView = "response";
+    if (old === "confirm-image") room.react("confirm");
+    if (old === "resume") queueMicrotask(() => { lastScreenKey = ""; });
     if (!action) return;
     event.preventDefault(); event.stopImmediatePropagation();
-    if (recorder && ["consent-next", "consent-prev", "consent-finish", "text-only", "skip-double", "permissions"].includes(action)) return status("Stop recording first so your voice sample is saved.", "error");
+    if (action === "forward") { if (!transitioning && currentForward?.enabled && !button.disabled) currentForward.run?.(); return; }
+    if (action === "forward-alt") { if (recorder) return status("Stop recording first so your voice sample is saved.", "error"); if (!transitioning && currentForward?.alt && !button.disabled) currentForward.alt.run(); return; }
+    if (recorder && ["text-only", "skip-double", "permissions", "no-face"].includes(action)) return status("Stop recording first so your voice sample is saved.", "error");
     if (action === "begin") return begin();
-    if (action === "enter") return enterExperience();
-    if (action === "close-reader") return reader.close();
+    if (action === "jump") { document.activeElement?.blur?.(); return jumpTo(Number(button.dataset.pos)); }
     if (action === "camera-switch") {
-      if (cameraStream) { stopCamera(); sessionState.consent.cameraPresence = false; render(); }
+      if (cameraStream) { stopCamera(); s.consent.cameraPresence = false; render(); }
       else await enablePresenceCamera();
+      return;
     }
-    if (action === "permissions") { if (busy) cancelActiveOperations(); travel(() => { state().checkpoint = true; state().consentPage = 0; render(); }, -1); }
-    if (action === "consent-next") travel(() => { state().consentPage = Math.min(2, state().consentPage + 1); render(); });
-    if (action === "consent-prev") travel(() => { state().consentPage = Math.max(0, state().consentPage - 1); render(); }, -1);
-    if (action === "consent-finish") finishConsent();
-    if (action === "text-only") finishConsent(true);
-    if (action === "skip-double") skipDouble();
-    if (action === "retake-portrait") { state().retakingPortrait = true; render(); }
+    if (action === "permissions") { if (busy) cancelActiveOperations(); return travel(() => { u.checkpoint = true; u.consentPage = 0; render(); }, -1, { num: "05", title: "THRESHOLD" }); }
+    if (action === "text-only") return finishConsent(true);
+    if (action === "no-face") { setFace(false); return finishConsent(); }
+    if (action === "skip-double") return skipDouble();
+    if (action === "retake-portrait") { u.retakingPortrait = true; u.portraitConfirmed = false; s.consent.faceAnimation = false; clearAvatarVideo(); render(); if (!cameraStream) await enablePresenceCamera(); return; }
     if (action === "take-portrait") {
-      if (!cameraStream) return status("Turn the camera on beside the portrait controls first.", "error");
-      state().portraitConfirmed = false; state().retakingPortrait = false; await base.capturePortrait();
+      if (!cameraStream) return enablePresenceCamera();
+      u.portraitConfirmed = false; u.retakingPortrait = false; await base.capturePortrait();
+      // The still is all that is needed; release the camera until a retake is requested.
+      if (s.supplied.portrait) { stopCamera(); s.consent.cameraPresence = false; render(); }
+      return;
     }
-    if (action === "confirm-portrait") { state().portraitConfirmed = true; render(); }
-    if (action === "retry-media") await generateProxyMedia();
-    if (action === "proxy-review") travel(() => { state().proxyView = "review"; render(); });
-    if (action === "allow-simulation") { sessionState.consent.fictionalGeneration = true; await generateFiction(); }
-    if (action === "generate-simulation") await generateFiction();
-    if (action === "reveal-simulation") travel(() => { state().simulationStep = "scene"; room.react("reveal"); render(); });
-    if (action === "scene-back") travel(() => { state().simulationStep = "scene"; render(); }, -1);
-    if (action === "simulation-review") travel(() => { state().simulationStep = "review"; render(); });
-    if (action === "simulation-evidence") openReader("Why does the AI think this?", simEvidence(sessionState.generated.simulation));
-    if (action === "judge-simulation") { state().simulationFeedback.rating = button.dataset.value; render(); }
-    if (action === "simulation-reflect") travel(() => { state().simulationStep = "reflection"; render(); });
-    if (action === "reject-simulation") { state().simulationFeedback.rejected = true; room.react("reject"); render(); }
-    if (action === "delete-simulation") { if (activeOperations.has("fiction")) cancelActiveOperations(); sessionState.generated.simulation = null; sessionState.generated.simulationContext = null; state().simulationFeedback = {}; sessionState.ui.fictionAnswered = false; room.react("reject"); reader.close(); render(); if (dialog.open) renderData(); }
-    if (action === "delete-clone-sample") { setRecording("clone-sample", null); sessionState.ui.selectedVoiceTarget = ""; renderData(); render(); }
+    if (action === "retry-media") return generateProxyMedia();
+    if (action === "stop-waiting") { cancelActiveOperations("You stopped waiting. Everything that was ready is kept."); render(); return; }
+    if (action === "judge-simulation") { u.simulationFeedback.rating = button.dataset.value; acknowledge = "simulation"; render(); return; }
+    if (action === "reject-simulation") { u.simulationFeedback.rejected = !u.simulationFeedback.rejected; acknowledge = "simulation"; room.react("reject"); render(); return; }
+    if (action === "delete-simulation") {
+      if (activeOperations.has("fiction")) cancelActiveOperations();
+      s.generated.simulation = null; s.generated.simulationContext = null; u.simulationFeedback = {}; u.simulationStep = "scenario"; s.ui.fictionAnswered = false;
+      room.react("reject"); render(); if (dialog.open) renderData(); return;
+    }
+    if (action === "delete-clone-sample") { setRecording("clone-sample", null); s.ui.selectedVoiceTarget = ""; renderData(); render(); }
   }, true);
-  addEventListener("resize", () => { captureDrafts(); render(); if (dialog.open) renderData(); });
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape") document.getElementById("sessionMenu").open = false;
+  });
+  let resizeTimer = 0;
+  addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (!transitioning) render(); }, 150); });
   addEventListener("pagehide", () => { cancelTransition(); room.dispose(); });
-  fetch("/api/capabilities").then(r => r.ok ? r.json() : null).then(value => { capabilities = value; }).catch(() => {});
-  if (developerMode) window.__v6 = { room, state, simInput, signature, render, getSession: () => sessionState, getPageCount: () => pages.length };
+  fetch("/api/capabilities").then(r => r.ok ? r.json() : null).then(value => { capabilities = value; render(); }).catch(() => {});
+
+  /* ---------- stale-build protection: an old tab says so instead of silently lagging ---------- */
+  const buildNotice = document.getElementById("buildNotice");
+  async function checkBuild() {
+    try {
+      const html = await (await fetch("/", { cache: "no-store" })).text();
+      const latest = html.match(/name="another-me-build" content="([^"]+)"/)?.[1];
+      if (!latest || latest === BUILD || buildNotice.dataset.latest === latest) return;
+      buildNotice.dataset.latest = latest;
+      buildNotice.innerHTML = `<p>This tab runs <code>${esc(BUILD)}</code>; the server now has <code>${esc(latest)}</code>. Reloading shows it but clears this session's in-memory data.</p>${row(`<button type="button" class="btn-secondary" id="reloadBuild">Reload now</button>`, `<button type="button" class="btn-tertiary" id="dismissBuild">Later</button>`)}`;
+      buildNotice.hidden = false;
+      document.getElementById("reloadBuild").onclick = () => location.reload();
+      document.getElementById("dismissBuild").onclick = () => { buildNotice.hidden = true; };
+    } catch { /* server offline: nothing to compare */ }
+  }
+  if (["localhost", "127.0.0.1"].includes(location.hostname)) { addEventListener("focus", checkBuild); setInterval(checkBuild, 60000); }
+
+  if (developerMode) window.__v6 = { room, ui, state: ui, simInput, forward, render, getSession: () => sessionState, build: BUILD };
   room.reduce(room.reduced);
   render();
 })();
