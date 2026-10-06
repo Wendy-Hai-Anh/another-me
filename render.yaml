@@ -19,3 +19,8 @@ services:
         sync: false
       - key: ALLOWED_ORIGINS
         value: https://wendy-hai-anh.github.io
+      # Where participant feedback is stored (the free tier has no persistent disk); see docs/DEPLOY.md.
+      - key: FEEDBACK_WEBHOOK_URL
+        sync: false
+      - key: FEEDBACK_EXPORT_TOKEN
+        sync: false

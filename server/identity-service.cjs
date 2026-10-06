@@ -79,9 +79,11 @@ function mapApiError(error) {
   return new IdentityLogicError("openai_api_failure", "OpenAI could not complete the request.", 502);
 }
 
-async function createStructuredOutput({ instructions, input, name, schema, validate, transform, maxOutputTokens, signal, attemptMs = REQUEST_TIMEOUT_MS, deadline = Infinity }) {
-  requireApiKey();
-  const client = new OpenAI({
+// buildInput lets a caller send non-JSON input (an image) while keeping the same retry and validation loop;
+// client lets tests substitute a fake Responses API.
+async function createStructuredOutput({ instructions, input, buildInput, client: injectedClient, name, schema, validate = () => [], transform, maxOutputTokens, signal, attemptMs = REQUEST_TIMEOUT_MS, deadline = Infinity, attempts = 2 }) {
+  if (!injectedClient) requireApiKey();
+  const client = injectedClient || new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
     maxRetries: 0,
     timeout: REQUEST_TIMEOUT_MS
@@ -90,7 +92,7 @@ async function createStructuredOutput({ instructions, input, name, schema, valid
   let validationFeedback = [];
 
   try {
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
       const controller = new AbortController();
       if (signal?.aborted) throw new IdentityLogicError("cancelled", "The request was cancelled.", 499);
       const remaining = Math.min(attemptMs, deadline - Date.now());
@@ -113,7 +115,7 @@ async function createStructuredOutput({ instructions, input, name, schema, valid
         response = await client.responses.create({
           model: MODEL,
           instructions,
-          input: JSON.stringify(requestInput),
+          input: buildInput ? buildInput(validationFeedback) : JSON.stringify(requestInput),
           max_output_tokens: maxOutputTokens,
           store: false,
           text: {
@@ -162,7 +164,7 @@ async function createStructuredOutput({ instructions, input, name, schema, valid
       const structuralErrors = validateSchema(schema, parsed);
       if (structuralErrors.length) {
         validationFeedback = structuralErrors.slice(0, 12);
-        if (attempt < 2) continue;
+        if (attempt < attempts) continue;
         throw new IdentityLogicError(
           "invalid_model_output",
           "The model output failed local schema validation.",
@@ -175,7 +177,7 @@ async function createStructuredOutput({ instructions, input, name, schema, valid
       const validationErrors = validate(transformed.data);
       if (validationErrors.length) {
         validationFeedback = validationErrors.slice(0, 12);
-        if (attempt < 2) continue;
+        if (attempt < attempts) continue;
         throw new IdentityLogicError(
           "invalid_model_output",
           "The model output failed local schema validation.",
@@ -241,7 +243,9 @@ async function createPrediction({ answers, profile, targetQuestion }) {
     input: {
       participant_answers: answers,
       identity_profile: profile,
-      target_question: targetQuestion
+      target_question: targetQuestion,
+      // Answers that sit on opposite sides of a recorded contradiction; a prediction may lean on one side only.
+      do_not_cite_together: profile.contradictions.map((contradiction) => contradiction.evidence_ids)
     },
     name: "identity_prediction",
     schema: predictionSchema,
@@ -250,15 +254,21 @@ async function createPrediction({ answers, profile, targetQuestion }) {
       if (prediction.target_question !== targetQuestion) {
         errors.push("$.target_question must copy the requested target question exactly.");
       }
+      // The interface introduces it with "I think you would tell them:", so it must be the words themselves.
+      if (/what would you say/i.test(targetQuestion) && /^\s*I(?:'d|’d| would)\s+(?:say|tell|reply|respond|answer)\b/i.test(prediction.predicted_response || "")) {
+        errors.push("$.predicted_response must be the words spoken to the other person, not a description such as \"I'd tell them\". Write only the words themselves.");
+      }
       return errors;
     },
-    maxOutputTokens: 1_500
+    maxOutputTokens: 1_500,
+    attempts: 3
   });
 }
 
 module.exports = {
   IdentityLogicError,
   MODEL,
+  createStructuredOutput,
   createIdentityProfile,
   createPrediction
 };

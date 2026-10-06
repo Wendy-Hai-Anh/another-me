@@ -8,6 +8,8 @@ const adapter = require("./openai-adapter.cjs");
 const media = require("./media-service.cjs");
 const proxyText = require("../shared/proxy-text.js");
 const { createSimulation } = require("./simulation-service.cjs");
+const conversation = require("./conversation-service.cjs");
+const feedback = require("./feedback-store.cjs");
 const { validateParticipantAnswers } = require("./schemas.cjs");
 const { safeError, diagnosticCode } = require("./safe-errors.cjs");
 
@@ -21,13 +23,16 @@ const accessCode = process.env.ACCESS_CODE || "";
 const limits = {
   requests: { max: Number(process.env.REQUESTS_PER_10_MIN || 40), windowMs: 10 * 60_000, routes: null },
   media: { max: Number(process.env.MEDIA_PER_HOUR || 4), windowMs: 60 * 60_000, routes: new Set(["/api/cloned-speech", "/api/talking-avatar"]) },
-  mediaDaily: { max: Number(process.env.MEDIA_PER_DAY || 40), windowMs: 24 * 60 * 60_000, routes: new Set(["/api/cloned-speech", "/api/talking-avatar"]), global: true }
+  mediaDaily: { max: Number(process.env.MEDIA_PER_DAY || 40), windowMs: 24 * 60 * 60_000, routes: new Set(["/api/cloned-speech", "/api/talking-avatar"]), global: true },
+  feedback: { max: Number(process.env.FEEDBACK_PER_HOUR || 10), windowMs: 60 * 60_000, routes: new Set(["/api/feedback"]) }
 };
 const hits = new Map();
 function overLimit(ip, pathname) {
   const now = Date.now();
   for (const [name, rule] of Object.entries(limits)) {
     if (rule.routes && !rule.routes.has(pathname)) continue;
+    // Feedback has its own small budget and does not use up the experience's request budget.
+    if (!rule.routes && pathname === "/api/feedback") continue;
     const key = rule.global ? name : `${name}:${ip}`;
     const recent = (hits.get(key) || []).filter(time => now - time < rule.windowMs);
     if (recent.length >= rule.max) { hits.set(key, recent); return true; }
@@ -64,8 +69,11 @@ const assets = new Map([
   ["/js/script.js", ["public/js/script.js", js]],
   ["/js/v6.js", ["public/js/v6.js", js]],
   ["/js/motion.js", ["public/js/motion.js", js]],
+  ["/js/music.js", ["public/js/music.js", js]],
   ["/js/proxy-text.js", ["shared/proxy-text.js", js]],
-  ["/js/simulation-core.js", ["shared/simulation-core.js", js]]
+  ["/js/simulation-core.js", ["shared/simulation-core.js", js]],
+  // Background music: four tracks, played alternately.
+  ...["digital-breathing", "sparse-piano-motif", "digital-breathing-2", "sparse-piano-motif-2"].map(name => [`/audio/${name}.mp3`, [`public/audio/${name}.mp3`, "audio/mpeg"]])
 ]);
 const maxJson = 64 * 1024;
 const maxMediaJson = 24 * 1024 * 1024;
@@ -112,21 +120,46 @@ const server = http.createServer(async (request, response) => {
     }
     if (["GET", "HEAD"].includes(request.method) && assets.has(url.pathname)) {
       const [name, type] = assets.get(url.pathname);
-      const file = await fs.readFile(path.join(root, name));
-      headers(response, type); response.writeHead(200).end(request.method === "HEAD" ? undefined : file); return;
+      let file;
+      try { file = await fs.readFile(path.join(root, name)); }
+      catch (error) { if (error.code === "ENOENT") { json(response, 404, { error: "Not found." }); return; } throw error; }
+      headers(response, type);
+      if (type === "audio/mpeg") {
+        // Music is large and never changes within a build; let the browser keep it and seek in it.
+        response.setHeader("Cache-Control", "public, max-age=86400");
+        response.setHeader("Accept-Ranges", "bytes");
+        const range = /^bytes=(\d*)-(\d*)$/.exec(request.headers.range || "");
+        if (range && (range[1] || range[2])) {
+          const start = range[1] ? Number(range[1]) : Math.max(0, file.length - Number(range[2]));
+          const end = range[1] && range[2] ? Math.min(Number(range[2]), file.length - 1) : file.length - 1;
+          if (start > end || start >= file.length) { response.setHeader("Content-Range", `bytes */${file.length}`); response.writeHead(416).end(); return; }
+          response.setHeader("Content-Range", `bytes ${start}-${end}/${file.length}`);
+          response.writeHead(206).end(request.method === "HEAD" ? undefined : file.subarray(start, end + 1)); return;
+        }
+      }
+      response.writeHead(200).end(request.method === "HEAD" ? undefined : file); return;
     }
     if (request.method === "GET" && url.pathname === "/api/capabilities") {
       json(response, 200, {
         openai: Boolean(process.env.OPENAI_API_KEY),
         elevenlabs: Boolean(process.env.ELEVENLABS_API_KEY),
         did: Boolean(process.env.DID_API_KEY),
-        accessCode: Boolean(accessCode)
+        accessCode: Boolean(accessCode),
+        feedback: feedback.mode()
       }); return;
     }
     if (request.method === "GET" && url.pathname === "/favicon.ico") { response.writeHead(204).end(); return; }
-    if (request.method !== "POST" || !["/api/transcribe","/api/profile","/api/predict","/api/proxy","/api/fiction","/api/simulation","/api/cloned-speech","/api/talking-avatar"].includes(url.pathname)) { json(response, 404, { error: "Not found." }); return; }
+    // The researcher downloads stored feedback with a separate token; it is never shown to participants.
+    if (request.method === "GET" && url.pathname === "/api/feedback/export") {
+      const token = process.env.FEEDBACK_EXPORT_TOKEN || "";
+      const given = String(request.headers.authorization || "").replace(/^Bearer\s+/i, "");
+      if (!token || Buffer.byteLength(given) !== Buffer.byteLength(token) || !require("node:crypto").timingSafeEqual(Buffer.from(given), Buffer.from(token))) { json(response, 401, { error: "Not allowed." }); return; }
+      headers(response, "application/x-ndjson; charset=utf-8"); response.writeHead(200).end(await feedback.exportAll()); return;
+    }
+    if (request.method !== "POST" || !["/api/transcribe","/api/profile","/api/predict","/api/proxy","/api/fiction","/api/simulation","/api/cloned-speech","/api/talking-avatar","/api/image-reading","/api/reply","/api/synthesis","/api/feedback"].includes(url.pathname)) { json(response, 404, { error: "Not found." }); return; }
     if (!originAllowed(request.headers.origin, request)) { json(response, 403, { error: "This site is not allowed to use the server.", code: "origin_not_allowed" }); return; }
-    if (accessCode && !codeMatches(request.headers["x-access-code"])) { json(response, 401, { error: "An access code is needed to use the live AI. Ask the researcher for it.", code: "access_code_required" }); return; }
+    // Feedback is optional and free to store, so it does not need the AI access code.
+    if (accessCode && url.pathname !== "/api/feedback" && !codeMatches(request.headers["x-access-code"])) { json(response, 401, { error: "An access code is needed to use the live AI. Ask the researcher for it.", code: "access_code_required" }); return; }
     const ip = String(request.headers["x-forwarded-for"] || "").split(",")[0].trim() || request.socket.remoteAddress || "unknown";
     if (overLimit(ip, url.pathname)) { json(response, 429, { error: "Too many requests from this device. Wait a few minutes, then try again.", code: "rate_limit" }); return; }
     if (url.pathname === "/api/transcribe") {
@@ -152,9 +185,23 @@ const server = http.createServer(async (request, response) => {
       const video = await media.createTalkingAvatar(image, input.image_type, audio, input.audio_type);
       headers(response, "video/mp4"); response.writeHead(200).end(video); return;
     }
+    // Short conversational calls: the client gives up quickly and falls back; the server stops when it does.
+    const withCancel = async work => {
+      const controller = new AbortController();
+      const cancel = () => { if (!response.writableEnded) controller.abort(); };
+      response.on("close", cancel);
+      try { return await work(controller.signal); } finally { response.off("close", cancel); }
+    };
+    if (url.pathname === "/api/image-reading") {
+      const input = await jsonBody(request, 6 * 1024 * 1024);
+      json(response, 200, { reading: await withCancel(signal => conversation.readImage(input, { signal })) }); return;
+    }
     const input = await jsonBody(request);
+    if (url.pathname === "/api/feedback") { json(response, 200, await withCancel(signal => feedback.store(input, { signal }))); return; }
+    if (url.pathname === "/api/reply") { json(response, 200, { reply: await withCancel(signal => conversation.reply(input, { signal })) }); return; }
+    if (url.pathname === "/api/synthesis") { json(response, 200, { synthesis: await withCancel(signal => conversation.synthesise(input, { signal })) }); return; }
     if (url.pathname === "/api/simulation") {
-      if (!input || !Array.isArray(input.answers) || input.answers.length > 12 || !input.answers.every(a => a && typeof a.id === "string" && typeof a.answer === "string" && a.answer.length <= 4000)
+      if (!input || !Array.isArray(input.answers) || input.answers.length > 20 || !input.answers.every(a => a && typeof a.id === "string" && typeof a.answer === "string" && a.answer.length <= 4000)
         || input.context && (typeof input.context !== "object" || Array.isArray(input.context))
         || [input.context?.profile_feedback, input.context?.contradiction_feedback, input.context?.profile?.inferred_information, input.context?.profile?.contradictions, input.seen_scenarios, input.discussed_questions].some(value => value !== undefined && !Array.isArray(value))) {
         json(response, 400, { error: "Please review your answers before generating a simulation." }); return;

@@ -17,12 +17,13 @@ const stageCaptions = [
   "Review clearly fictional content generated without your input."
 ];
 const questions = [
-  "When making a difficult decision, what usually matters most to you: your principles, other people or the practical outcome? Why?",
-  "A close friend needs your help on the same day as an important personal deadline. What would you do?",
-  "What is something people often misunderstand about you?"
+  "A close friend cancels your plans an hour before you're supposed to meet. It's the third time this month, and you turned down another invitation to keep the evening free. They apologise and say they've had a difficult week. What would you say to them, and what would you do about making plans again?",
+  "During a group presentation, a teammate presents an idea you developed together as though it was entirely theirs. The person assessing the work praises them. Your teammate then moves on without mentioning your contribution. What would you do in that moment, and what would you say afterwards?",
+  "Your closest friend is getting married, and you promised a year ago that you would attend and give a speech. Your manager now offers you a place at an important client meeting in another city on the same afternoon. It could improve your chances of promotion, but nothing is guaranteed. You cannot attend both. Which would you choose, and how would you explain your decision to the person you disappoint?"
 ];
-const dilemma = "An opportunity you really want conflicts with a promise you have already made. What would you choose?";
-const proxyQuestion = "Someone close to you makes an important decision on your behalf without asking and says, 'I knew what you would want.' How would you respond?";
+const storyQuestion = "What would I misunderstand about you if this image were all I had?";
+const dilemma = "A friend promised to help you prepare for an important presentation tomorrow. They now have a chance to interview for a job they really want, at the same time you arranged to work together. They ask whether you would be upset if they went. You would have to finish the preparation alone.";
+const proxyQuestion = "Someone close to you has volunteered you to help with an event this weekend without asking. You had deliberately kept that time free for yourself. They message: 'I told them you'd help. You're always the reliable one.'";
 const labels = {
   supplied: ["+", "SUPPLIED BY YOU"], transcribed: ["T", "TRANSCRIBED FROM YOUR AUDIO"],
   inferred: ["?", "INFERRED BY AI"], predicted: [">", "PREDICTED BY AI"],
@@ -640,7 +641,7 @@ function mockPrediction(answers) {
   return {
     target_question: dilemma,
     predicted_response: evidence.length ? "You might try to keep the promise or negotiate another time, depending on the opportunity." : null,
-    evidence_ids: evidence.map(answer => answer.id), assumptions_used: [],
+    evidence_ids: evidence.map(answer => answer.id), conflicting_evidence_ids: [], assumptions_used: [],
     confidence_score: evidence.length >= 2 ? 0.47 : 0.2, confidence_label: evidence.length >= 2 ? "medium" : "low",
     uncertainty_statement: "Based on limited information, the importance of the opportunity and promise is unclear.",
     alternative_possible_response: evidence.length ? "You might take the opportunity if it cannot be repeated." : null,
@@ -649,7 +650,7 @@ function mockPrediction(answers) {
 }
 function mockProxy(answers) {
   const evidence = answers.map(item => item.id);
-  return { text: "This is what I think you would do. I would ask why the decision was made without me and explain what I would have chosen. I might appreciate the intention, but I would want my choices to remain mine.",
+  return { text: "Thanks for thinking of me, but I'd kept this weekend free on purpose. I can help for an hour on Saturday morning if they're stuck. Next time, please ask me before you say yes for me.",
     evidence_ids: evidence, confidence_label: "low", feedback: "", correction: "" };
 }
 function mockFiction(answers) {
@@ -845,7 +846,7 @@ async function generateProxy() {
     const useMock = mockMode || !answers.length;
     const result = useMock ? mockProxy(answers)
       : (await callApi("/api/proxy", { answers, question: proxyQuestion, context: identityContext() }, "json", signal)).response;
-    if (!result?.text?.startsWith("This is what I think you would do. I would")) throw new OperationFailure("empty_response", "The on-behalf response was invalid.");
+    if (!result?.text?.trim()) throw new OperationFailure("empty_response", "The on-behalf response was invalid.");
     clearProxyMedia();
     sessionState.generated.proxyResponses = [{ ...result, feedback: "", correction: "" }];
     sessionState.generated.proxyMode = useMock ? "mock" : "real";
@@ -1020,12 +1021,14 @@ function stopRecorder(discard = false) {
   if (discard) { recorder = null; chunks = []; recordTarget = null; }
 }
 function recordingFor(target) {
+  if (String(target).startsWith("extra:")) return sessionState.supplied.extraAudio?.[target];
   if (target === "clone-sample") return sessionState.supplied.cloneSample;
   if (target === "story") return sessionState.supplied.audio;
   if (target === "prediction-answer") return sessionState.predicted.participantAnswers[0]?.audio;
   return sessionState.supplied.answers.find(row => row.id === target)?.audio;
 }
 function setRecording(target, value) {
+  if (String(target).startsWith("extra:")) { sessionState.supplied.extraAudio ||= {}; revoke(sessionState.supplied.extraAudio[target]); sessionState.supplied.extraAudio[target] = value; return; }
   if (target === "clone-sample") { revoke(sessionState.supplied.cloneSample); sessionState.supplied.cloneSample = value; clearProxyMedia(); return; }
   if (target === "story") {
     revoke(sessionState.supplied.audio); sessionState.supplied.audio = value; sessionState.audioConfirmed = false;
@@ -1050,8 +1053,8 @@ function setRecording(target, value) {
 async function startRecording() {
   if (recorder || activeOperations.has("microphone")) return;
   if (!isSecureContext || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") return failOperation("microphone", new OperationFailure("unsupported", "Microphone recording is unsupported."));
-  const target = sessionState.currentStage === 2 ? "story" : sessionState.currentStage === 3 ? sessionState.supplied.answers[sessionState.questionIndex]?.id
-    : sessionState.currentStage === 4 && sessionState.predictionShown ? "prediction-answer" : sessionState.currentStage === 5 && sessionState.ui.v6?.checkpoint ? "clone-sample" : null;
+  const target = (typeof window.customRecordTarget === "function" && window.customRecordTarget()) || (sessionState.currentStage === 2 ? "story" : sessionState.currentStage === 3 ? sessionState.supplied.answers[sessionState.questionIndex]?.id
+    : sessionState.currentStage === 4 && sessionState.predictionShown ? "prediction-answer" : sessionState.currentStage === 5 && sessionState.ui.v6?.checkpoint ? "clone-sample" : null);
   if (!target) return;
   await runOperation("microphone", async ({ signal }) => {
     const pending = navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -1087,13 +1090,14 @@ async function startRecording() {
     return true;
   });
 }
-async function transcribeCurrent(target = sessionState.currentStage === 2 ? "story" : sessionState.currentStage === 4 ? "prediction-answer" : sessionState.supplied.answers[sessionState.questionIndex]?.id) {
+async function transcribeCurrent(target = (typeof window.customRecordTarget === "function" && window.customRecordTarget()) || (sessionState.currentStage === 2 ? "story" : sessionState.currentStage === 4 ? "prediction-answer" : sessionState.supplied.answers[sessionState.questionIndex]?.id)) {
   const recording = recordingFor(target);
   if (!sessionState.consent.transcription || !recording?.blob) return status("Confirm transcription permission and record audio first.", "error");
   if (target === "story" && !sessionState.audioConfirmed) return status("Listen to and confirm the recording before transcription.", "error");
   await runOperation("transcription", async ({ signal }) => {
     const transcript = (await callApi("/api/transcribe", recording.blob, "audio", signal)).trim();
     if (!transcript) throw new OperationFailure("empty_response", "No speech was detected.");
+    if (String(target).startsWith("extra:")) { window.applyExtraTranscript?.(target, transcript); return true; }
     if (target === "story") { sessionState.supplied.transcript = transcript; sessionState.supplied.transcriptOrigin = "transcribed"; }
     else if (target === "prediction-answer") {
       sessionState.predicted.participantAnswers = [{ ...sessionState.predicted.participantAnswers[0], text: transcript, textOrigin: "transcribed" }];
@@ -1323,7 +1327,7 @@ document.addEventListener("click", async event => {
     if (shouldStart) void startRecording();
   }
   else if (action === "stop-recording") stopRecorder();
-  else if (action === "delete-audio") { const target = sessionState.currentStage === 2 ? "story" : sessionState.currentStage === 4 ? "prediction-answer" : sessionState.supplied.answers[sessionState.questionIndex].id; setRecording(target, null); render(); status("Recording deleted from memory.", "success"); }
+  else if (action === "delete-audio") { const target = (typeof window.customRecordTarget === "function" && window.customRecordTarget()) || (sessionState.currentStage === 2 ? "story" : sessionState.currentStage === 4 ? "prediction-answer" : sessionState.supplied.answers[sessionState.questionIndex].id); setRecording(target, null); render(); status("Recording deleted from memory.", "success"); }
   else if (action === "confirm-audio") {
     if (sessionState.currentStage === 2) sessionState.audioConfirmed = true;
     render(); status("Recording confirmed.", "success");

@@ -15,11 +15,16 @@
     { id: "shared-credit", title: "The missing name", scenario: "A group publishes a thank-you note for a community display. One contributor who helped substantially has been left out, and you notice before anyone else comments.", terms: /credit|contributor|thank.you|left.out|missing.name/i, action: "privately ask the organiser to add the missing contributor before sharing the note", dialogue: "Could we add their name? They helped with a substantial part of the display." },
     { id: "everyday-boundary", title: "Before borrowing again", scenario: "A neighbour returns your tool after borrowing it without asking a second time. They assume you do not mind and mention that they will need it again next weekend.", terms: /borrow|tool|neighbour|neighbor|boundar/i, action: "explain that they must ask first and agree on a return time for any future loan", dialogue: "Please check with me first next time, even if I have lent it before." }
   ];
+  // Stage 6 situation chosen from user testing. The app requests it by id; it is always eligible, because
+  // it is the situation the experience is built around rather than a novelty draw from the pool.
+  const fixed = {
+    "overlooked-helper": { id: "overlooked-helper", title: "The person who helped", scenario: "Months from now, you receive recognition for something you worked hard to achieve. During the celebration, someone who helped you along the way says, within earshot of others: 'I'm happy for you. I just wish you'd remembered who helped you get here.' You had not intended to make them feel overlooked.", action: "ask them for a private conversation the next day and name their contribution in a follow-up message to the group", dialogue: "You're right that I should have said it. Can we talk properly tomorrow?" }
+  };
   const str = { type: "string" };
   const list = { type: "array", items: str };
   const object = properties => ({ type: "object", additionalProperties: false, properties, required: Object.keys(properties) });
   const schema = object({
-    scenario_id: { type: "string", enum: pool.map(s => s.id) }, scenario_title: str, scenario: str,
+    scenario_id: { type: "string", enum: [...pool.map(s => s.id), ...Object.keys(fixed)] }, scenario_title: str, scenario: str,
     predicted_decision: str, predicted_action: str, predicted_thought: str,
     predicted_dialogue: { type: ["string", "null"] }, predicted_consequence: str,
     evidence: { type: "array", items: object({ source_id: str, source: str, interpretation: str, type: { type: "string", enum: ["supplied", "inferred"] } }) },
@@ -65,6 +70,7 @@
     return { sources, contradictions };
   }
   function candidates(input) {
+    if (fixed[input?.scenario]) return [fixed[input.scenario]];
     const previous = (input.answers || []).map(a => `${a.question} ${a.answer}`).join(" ") + " " + (input.discussed_questions || []).join(" ");
     return pool.filter(s => !s.terms.test(previous) && !(input.seen_scenarios || []).includes(s.id));
   }
@@ -115,11 +121,12 @@
     const pause = /wait|quiet|withdraw|time to think|reflect/i.test(text);
     const result = {
       scenario_id: s.id, scenario_title: s.title, scenario: s.scenario,
-      predicted_decision: pause ? "One possible version of you might pause to understand the problem before committing to a response." : "One possible version of you might choose a small, direct step instead of leaving the problem unresolved.",
+      predicted_decision: s.id === "overlooked-helper" ? (pause ? "One possible version of you might let the moment pass in public and decide to repair it in private." : "One possible version of you might decide the omission needs fixing in front of the same people who heard it.")
+        : pause ? "One possible version of you might pause to understand the problem before committing to a response." : "One possible version of you might choose a small, direct step instead of leaving the problem unresolved.",
       predicted_action: `You might ${pause ? "first ask for a moment to think, then " : ""}${s.action}.`,
-      predicted_thought: "You might weigh the discomfort of speaking up against the uncertainty of doing nothing. Your actual reaction is unknown.",
+      predicted_thought: s.id === "overlooked-helper" ? "You might feel a flash of embarrassment, then a quieter worry that they have been keeping this to themselves for a while." : "You might weigh the discomfort of speaking up against the uncertainty of doing nothing. Your actual reaction is unknown.",
       predicted_dialogue: s.dialogue,
-      predicted_consequence: "The other person could respond constructively or disagree; the outcome is unknown.",
+      predicted_consequence: s.id === "overlooked-helper" ? "They might soften a little, but the people nearby have already heard it, and the celebration might feel quieter for the rest of the evening." : "The other person could respond constructively or disagree; the outcome is unknown.",
       evidence: context.sources.slice(0, 3).map(s => ({ source_id: s.id, source: s.label, type: s.type, interpretation: "This eligible source was available to the rule-based demonstration; it does not establish how you would act." })),
       generated_elements: ["The situation", "The possible decision and action", "The imagined internal reaction", "The dialogue and possible consequence"],
       contradictory_evidence: context.contradictions,
@@ -129,5 +136,5 @@
     };
     return result;
   }
-  return { warning, sensitive, pool, schema, evidenceContext, candidates, validate, mock };
+  return { warning, sensitive, pool, fixed, schema, evidenceContext, candidates, validate, mock };
 });

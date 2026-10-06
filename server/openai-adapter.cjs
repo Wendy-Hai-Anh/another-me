@@ -32,16 +32,16 @@ const fictionResultSchema = {
   required: ["fictional_memory", "details_borrowed_from_user", "details_invented_by_ai", "source_label", "warning", "evidence_ids", "confidence_label"]
 };
 function client() {
-  if (!process.env.OPENAI_API_KEY) throw Object.assign(new Error("OPENAI_API_KEY is not configured on the server."), { statusCode: 503 });
+  if (!process.env.OPENAI_API_KEY) throw Object.assign(new Error("OPENAI_API_KEY is not configured on the server."), { statusCode: 503, code: "missing_api_key" });
   return new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0, timeout: 90_000 });
 }
 async function transcribe(buffer, type) {
   const name = audioNames.get(type);
   if (!name) throw Object.assign(new Error("Unsupported audio format."), { statusCode: 415 });
-  if (!buffer.length) throw Object.assign(new Error("Recording is empty."), { statusCode: 400 });
+  if (!buffer.length) throw Object.assign(new Error("Recording is empty."), { statusCode: 400, code: "no_speech", publicMessage: "The recording was empty." });
   const file = await toFile(buffer, name, { type });
   const result = await client().audio.transcriptions.create({ file, model: "gpt-transcribe" });
-  if (!result.text?.trim()) throw Object.assign(new Error("No speech was detected."), { statusCode: 422 });
+  if (!result.text?.trim()) throw Object.assign(new Error("No speech was detected."), { statusCode: 422, code: "no_speech", publicMessage: "No speech was heard in the recording." });
   return result.text.trim();
 }
 function validateFictionResult(result, answers) {
@@ -74,14 +74,16 @@ function validateFictionResult(result, answers) {
 async function generate(kind, answers, question, context = {}) {
   const ids = answers.map(item => item.id);
   const instructions = kind === "proxy"
-    ? `You are a deliberately uncertain first-person proxy in an identity experiment. Use the supplied answers, temporary profile, participant corrections, and earlier prediction feedback as evidence. Answer in 2-3 concise natural sentences and no more than 70 words, beginning exactly: "This is what I think you would do. I would". Continue speaking as the participant using I/me/my, not as an outside narrator. Make a specific choice and explain its reasoning; reflect tensions in the evidence instead of copying phrases into a template. Do not claim certainty or psychological authority. Put references to provided answer IDs ONLY in the evidence_ids array. The text is spoken aloud: never include citations, brackets containing references, question numbers, source IDs, or phrases such as 'as I said in question one'. Explain the choice naturally without referring to this questionnaire. Do not infer sensitive traits. Set invented_detail to an empty string.`
+    ? `You are an AI double replying to a message on the participant's behalf, in an identity experiment. question contains the situation and the message they received. Write the exact message they would send back, as if they were typing it to the sender: first person (I/me/my), addressing the sender as "you", 2-4 short sentences and no more than 70 words. It is the message itself, never a description of it: do not begin with "I would say", "I'd tell them" or similar. Use their supplied answers, corrections, reactions and earlier prediction feedback as evidence of how they speak and decide. Match their style: their length, directness, warmth and the kind of words they use. Do not default to being polite, apologetic or assertive; choose what the evidence suggests, and make one specific decision (whether and how much they help, and on what terms) with the reason implied in the wording, so the participant can tell exactly where it does or does not sound like them. Never claim certainty or psychological authority, never invent events, people or plans that are not in the situation, and do not infer sensitive traits. Put references to provided answer IDs ONLY in the evidence_ids array. The text may be spoken aloud: never include citations, brackets, question numbers, source IDs, stage directions or phrases such as 'as I said in question one'. Set invented_detail to an empty string.`
     : `Create an explicitly fictional first-person hypothetical memory for an identity experiment. Connect it to 1-3 short, exact fragments copied from the participant answers and list those fragments in details_borrowed_from_user. Begin fictional_memory exactly with "I remember". Introduce 2-3 concrete details that appear nowhere in the supplied answers, using categories such as a location, weather, object, action, sound, texture, smell, temperature or light. Put each invented detail's exact wording in details_invented_by_ai and include every listed detail visibly in fictional_memory. Build a coherent 4-6 sentence scene rather than filling a fixed template. Set source_label exactly to "GENERATED WITHOUT YOUR INPUT", warning exactly to "${fictionWarning}", and confidence_label to low. Never imply the event happened, diagnose the participant or infer sensitive traits. Cite only provided answer IDs.`;
   const schema = kind === "proxy" ? proxyResultSchema : fictionResultSchema;
   const api = client();
-  for (let attempt = 1; attempt <= (kind === "fiction" ? 2 : 1); attempt += 1) {
+  // A reply that narrates ("I'd tell them...") instead of being the message gets one corrected retry.
+  const narrated = text => /^\s*I(?:'d|’d| would)\s+(?:say|tell|reply|respond|answer|text|write)\b/i.test(text || "");
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
     const response = await api.responses.create({
       model: process.env.OPENAI_MODEL || "gpt-5.4-mini", store: false,
-      instructions: attempt === 1 ? instructions : `${instructions} Your previous output failed validation. Copy borrowed fragments exactly from the supplied answers. Make each of 2-3 invented details an exact, visible substring of fictional_memory and absent from all supplied answers.`,
+      instructions: attempt === 1 ? instructions : kind === "proxy" ? `${instructions} Your previous reply described the message instead of being the message. Write only the message text itself.` : `${instructions} Your previous output failed validation. Copy borrowed fragments exactly from the supplied answers. Make each of 2-3 invented details an exact, visible substring of fictional_memory and absent from all supplied answers.`,
       input: JSON.stringify({ supplied_answers: answers, temporary_identity_context: context || {}, question }),
       text: { format: { type: "json_schema", name: `${kind}_result`, strict: true, schema } },
       max_output_tokens: kind === "proxy" ? 500 : 1200
@@ -90,7 +92,8 @@ async function generate(kind, answers, question, context = {}) {
     let result;
     try { result = JSON.parse(response.output_text); } catch { throw Object.assign(new Error("The model returned invalid JSON."), { statusCode: 502 }); }
     if (!Array.isArray(result.evidence_ids) || !result.evidence_ids.every(id => ids.includes(id))) throw Object.assign(new Error("The model returned invalid evidence."), { statusCode: 502 });
-    if (kind === "proxy" && (!result.text?.startsWith("This is what I think you would do. I would") || result.invented_detail)) throw Object.assign(new Error("The proxy response failed first-person validation."), { statusCode: 502 });
+    if (kind === "proxy" && attempt === 1 && narrated(result.text)) continue;
+    if (kind === "proxy" && (!result.text?.trim() || narrated(result.text) || result.invented_detail || !/\b(I|I'm|I'd|I'll|I've|me|my)\b/.test(result.text) || result.text.split(/\s+/).length > 80)) throw Object.assign(new Error("The proxy response failed first-person validation."), { statusCode: 502 });
     if (kind === "proxy") return validateProxyScript(result);
     try { return validateFictionResult(result, answers); }
     catch (error) { if (attempt === 2) throw error; }

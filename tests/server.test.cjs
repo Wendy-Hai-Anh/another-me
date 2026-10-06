@@ -18,7 +18,19 @@ test("server serves only integration assets and keeps secrets inaccessible", asy
     assert.equal((await fetch(`${base}/.env.local`)).status, 404);
     assert.equal((await fetch(`${base}/server/index.cjs`)).status, 404);
     const capabilities = await (await fetch(`${base}/api/capabilities`)).json();
-    assert.deepEqual(capabilities, { openai: false, elevenlabs: false, did: false });
+    assert.deepEqual({ openai: capabilities.openai, elevenlabs: capabilities.elevenlabs, did: capabilities.did }, { openai: false, elevenlabs: false, did: false });
+    assert.ok(["disk", "webhook", "off"].includes(capabilities.feedback));
+    for (const track of ["digital-breathing", "sparse-piano-motif", "digital-breathing-2", "sparse-piano-motif-2"]) {
+      const audio = await fetch(`${base}/audio/${track}.mp3`, { headers: { Range: "bytes=0-99" } });
+      assert.equal(audio.status, 206);
+      assert.equal(audio.headers.get("content-type"), "audio/mpeg");
+      assert.equal((await audio.arrayBuffer()).byteLength, 100);
+    }
+    assert.equal((await fetch(`${base}/js/music.js`)).status, 200);
+    for (const route of ["image-reading", "reply", "synthesis"]) {
+      const result = await fetch(`${base}/api/${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      assert.ok([400, 503].includes(result.status), `${route} rejects an empty request without a key`);
+    }
     const transcribe = await fetch(`${base}/api/transcribe`, { method: "POST", headers: { "Content-Type": "audio/webm" }, body: "synthetic" });
     assert.equal(transcribe.status, 503);
     const profile = await fetch(`${base}/api/profile`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ answers: [{ id: "q1", question: "What?", answer: "Synthetic input" }] }) });

@@ -34,7 +34,25 @@ To preview exactly what gets published: `npm run site` builds the same folder in
 
 3. When it is live, copy its address (e.g. `https://another-me-api.onrender.com`) and open it in a browser: `/api/capabilities` should show `true` for each key and for `accessCode`.
 
-Optional limits (defaults in brackets): `REQUESTS_PER_10_MIN` per visitor (40), `MEDIA_PER_HOUR` cloned-voice/animation requests per visitor (4), `MEDIA_PER_DAY` across everyone (40).
+Optional limits (defaults in brackets): `REQUESTS_PER_10_MIN` per visitor (40), `MEDIA_PER_HOUR` cloned-voice/animation requests per visitor (4), `MEDIA_PER_DAY` across everyone (40), `FEEDBACK_PER_HOUR` feedback submissions per visitor (10).
+
+### Feedback storage
+
+The final feedback form posts to `/api/feedback`. Each record holds only the submission id, build version, the chosen answers and the two comments. The server reports success only after the record is stored:
+
+- **Locally** (`npm start`) records are appended to `data/feedback/feedback.jsonl` (git-ignored). Set `FEEDBACK_DIR` to use another folder.
+- **On Render's free tier the disk is wiped on every restart and sleep**, so set `FEEDBACK_WEBHOOK_URL` to a store you control. The record is POSTed there as JSON and counts as sent only on a 2xx reply. A Google Sheet works: in the sheet, *Extensions → Apps Script*, paste the function below, *Deploy → New deployment → Web app*, execute as you, access "Anyone", and use the web-app URL as `FEEDBACK_WEBHOOK_URL`.
+
+```js
+function doPost(e) {
+  const r = JSON.parse(e.postData.contents);
+  SpreadsheetApp.getActive().getSheets()[0].appendRow([r.received_at, r.submission_id, r.version, JSON.stringify(r.answers), JSON.stringify(r.comments)]);
+  return ContentService.createTextOutput("ok");
+}
+```
+
+- To download stored records from the server's own disk, set `FEEDBACK_EXPORT_TOKEN` and request `GET /api/feedback/export` with `Authorization: Bearer <token>` (newline-delimited JSON).
+- `/api/capabilities` reports `feedback: "webhook"`, `"disk"` or `"off"` (`FEEDBACK_DISABLED=1`). The published demonstration without a server offers only *Download a copy*.
 
 The free tier sleeps after ~15 minutes idle; the first request then takes up to a minute. For an exhibition, wake it beforehand or use a paid instance.
 

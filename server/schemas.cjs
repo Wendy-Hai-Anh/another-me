@@ -129,6 +129,11 @@ const predictionSchema = {
       type: "array",
       items: { type: "string", minLength: 1 }
     },
+    // Answers that point the other way: shown to the participant, never counted as support.
+    conflicting_evidence_ids: {
+      type: "array",
+      items: { type: "string", minLength: 1 }
+    },
     assumptions_used: {
       type: "array",
       items: { type: "string", minLength: 1 }
@@ -147,6 +152,7 @@ const predictionSchema = {
     "target_question",
     "predicted_response",
     "evidence_ids",
+    "conflicting_evidence_ids",
     "assumptions_used",
     "confidence_score",
     "confidence_label",
@@ -254,7 +260,7 @@ function validateParticipantAnswers(answers) {
     }
   });
 
-  if (JSON.stringify(answers).length > 12_000) errors.push("answers are too large for this prototype.");
+  if (JSON.stringify(answers).length > 24_000) errors.push("answers are too large for this prototype.");
   return errors;
 }
 
@@ -397,6 +403,11 @@ function validatePrediction(prediction, answers, profile) {
     if (!answerIds.has(id)) errors.push("$.evidence_ids contains an unknown answer ID.");
     if (sensitiveAnswerIds.has(id)) errors.push("$.evidence_ids must not cite explicitly supplied sensitive information.");
   });
+  prediction.conflicting_evidence_ids.forEach((id) => {
+    if (!answerIds.has(id)) errors.push("$.conflicting_evidence_ids contains an unknown answer ID.");
+    if (sensitiveAnswerIds.has(id)) errors.push("$.conflicting_evidence_ids must not cite explicitly supplied sensitive information.");
+    if (prediction.evidence_ids.includes(id)) errors.push("$.conflicting_evidence_ids must not repeat an ID from $.evidence_ids.");
+  });
   prediction.assumptions_used.forEach((id) => {
     if (!assumptionIds.has(id)) errors.push("$.assumptions_used contains an unknown generated-assumption ID.");
   });
@@ -414,12 +425,11 @@ function validatePrediction(prediction, answers, profile) {
     errors.push("$.confidence_score must be low when predicted_response is null.");
   }
 
-  const usesContradictoryEvidence = profile.contradictions.some((contradiction) => {
-    const usedIds = contradiction.evidence_ids.filter((id) => prediction.evidence_ids.includes(id));
-    return usedIds.length >= 2;
-  });
-  if (usesContradictoryEvidence && prediction.predicted_response !== null) {
-    errors.push("$.predicted_response must be null when the prediction relies on contradictory evidence.");
+  const contradictoryPair = profile.contradictions.map((contradiction) => contradiction.evidence_ids.filter((id) => prediction.evidence_ids.includes(id))).find((usedIds) => usedIds.length >= 2);
+  // Leaning on both sides of a recorded contradiction is allowed only as a low-confidence guess,
+  // so a tension elsewhere in the profile never passes as a confident prediction.
+  if (contradictoryPair && prediction.predicted_response !== null && (prediction.confidence_score >= 0.4 || prediction.confidence_label !== "low")) {
+    errors.push(`$.evidence_ids cites both sides of a recorded contradiction (${contradictoryPair.join(", ")}). Either move the answer that points the other way to conflicting_evidence_ids, or keep both and set a low confidence (below 0.4).`);
   }
 
   if (SENSITIVE_CONTENT.test(prediction.target_question)) {

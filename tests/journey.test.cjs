@@ -297,9 +297,9 @@ test("Stage 5 creates cloned first-person speech and a talking avatar after sepa
     sessionState.supplied.portrait = { blob: new Blob(["portrait"], {type:"image/jpeg"}), url:"blob:portrait", origin:"webcam" };
     sessionState.generated.proxyResponses = [mockProxy([])]`);
   await h.run("generateProxyMedia()");
-  assert.match(h.run("sessionState.generated.proxyResponses[0].text"), /I would/);
+  assert.match(h.run("sessionState.generated.proxyResponses[0].text"), /I'd kept this weekend free/);
   assert.equal(h.run("sessionState.generated.proxyMedia.presentation"), "talking-avatar");
-  assert.ok(h.requests.some(request => request.url.startsWith("/api/cloned-speech?text=I%20would")));
+  assert.ok(h.requests.some(request => request.url.startsWith("/api/cloned-speech?text=Thanks%20for%20thinking%20of%20me")));
   assert.ok(h.requests.some(request => request.url === "/api/talking-avatar"));
   assert.match(h.run("renderProxy()"), /Talking portrait with temporary cloned audio/);
 });
@@ -313,11 +313,11 @@ test("D-ID failure preserves cloned audio instead of silently using standard voi
   assert.equal(h.run("sessionState.generated.proxyMedia.presentation"), "cloned-audio");
   assert.equal(h.run("Boolean(sessionState.generated.proxyMedia.audio)"), true);
   assert.equal(h.run("Boolean(sessionState.generated.proxyMedia.video)"), false);
-  assert.match(h.run("renderProxy()"), /temporary cloned audio remains available/);
+  assert.match(h.run("renderProxy()"), /Your cloned audio is still available/);
 });
 test("Stage 5 question does not assume the supplied image has a memory", () => {
   const h = harness(); h.run("sessionState.currentStage = 5");
-  assert.match(h.run("renderProxy()"), /important decision on your behalf/);
+  assert.match(h.run("renderProxy()"), /volunteered you to help with an event this weekend/);
   assert.doesNotMatch(h.run("renderProxy()"), /memory connected to your image/);
 });
 test("Stage 5 puts the response and participant review on separate screens", () => {

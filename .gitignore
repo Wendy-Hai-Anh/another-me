@@ -8,3 +8,5 @@ tests/browser/artifacts/
 archive/media-samples/
 # Local copy of the published site (npm run site)
 _site/
+# Stored participant feedback (local server)
+data/
