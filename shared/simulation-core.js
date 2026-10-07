@@ -27,6 +27,7 @@
     scenario_id: { type: "string", enum: [...pool.map(s => s.id), ...Object.keys(fixed)] }, scenario_title: str, scenario: str,
     predicted_decision: str, predicted_action: str, predicted_thought: str,
     predicted_dialogue: { type: ["string", "null"] }, predicted_consequence: str,
+    recognised_reasoning: str, invented_leap: str,
     evidence: { type: "array", items: object({ source_id: str, source: str, interpretation: str, type: { type: "string", enum: ["supplied", "inferred"] } }) },
     generated_elements: list,
     contradictory_evidence: { type: "array", items: object({ evidence_ids: list, description: str, participant_explanation: str }) },
@@ -101,7 +102,7 @@
     });
     if (JSON.stringify(result.contradictory_evidence) !== JSON.stringify(context.contradictions)) errors.push("contradictions: must be preserved exactly");
     if ((context.sources.filter(s => s.type === "supplied").length < 2 || context.contradictions.length) && result.confidence !== "low") errors.push("confidence: low required for limited or contradictory evidence");
-    for (const key of ["predicted_decision", "predicted_action", "predicted_thought", "predicted_consequence", "uncertainty_statement", "alternative_action"]) {
+    for (const key of ["predicted_decision", "predicted_action", "predicted_thought", "predicted_consequence", "uncertainty_statement", "alternative_action", "recognised_reasoning", "invented_leap"]) {
       if (!result[key].trim() || result[key].length > 650) errors.push(`${key}: empty or too long`);
     }
     if (!/may|might|possible|plausible|could|uncertain/i.test(result.uncertainty_statement)) errors.push("uncertainty: required");
@@ -126,6 +127,8 @@
       predicted_action: `You might ${pause ? "first ask for a moment to think, then " : ""}${s.action}.`,
       predicted_thought: s.id === "overlooked-helper" ? "You might feel a flash of embarrassment, then a quieter worry that they have been keeping this to themselves for a while." : "You might weigh the discomfort of speaking up against the uncertainty of doing nothing. Your actual reaction is unknown.",
       predicted_dialogue: s.dialogue,
+      recognised_reasoning: "This demonstration does not read your answers; any resemblance to your reasoning is a coincidence.",
+      invented_leap: s.id === "overlooked-helper" ? "That you would name their contribution to the whole group afterwards." : "The whole decision is a prepared example.",
       predicted_consequence: s.id === "overlooked-helper" ? "They might soften a little, but the people nearby have already heard it, and the celebration might feel quieter for the rest of the evening." : "The other person could respond constructively or disagree; the outcome is unknown.",
       evidence: context.sources.slice(0, 3).map(s => ({ source_id: s.id, source: s.label, type: s.type, interpretation: "This eligible source was available to the rule-based demonstration; it does not establish how you would act." })),
       generated_elements: ["The situation", "The possible decision and action", "The imagined internal reaction", "The dialogue and possible consequence"],

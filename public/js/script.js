@@ -809,7 +809,7 @@ async function generateProfile(inlineQuestion = null) {
   const answers = readableAnswers();
   const completed = await runOperation("identity", async ({ signal }) => {
     const useMock = mockMode || !answers.length;
-    const profile = useMock ? mockProfile(answers) : (await callApi("/api/profile", { answers }, "json", signal)).profile;
+    const profile = useMock ? mockProfile(answers) : (await callApi("/api/profile", { answers, rejected_interpretations: window.rejectedInterpretations?.() || [] }, "json", signal)).profile;
     if (!profile || !Array.isArray(profile.inferred_information) || !Array.isArray(profile.supplied_information)) throw new OperationFailure("empty_response", "The profile response was invalid.");
     sessionState.inferred.profile = profile;
     sessionState.inferred.mode = useMock ? "mock" : "real";

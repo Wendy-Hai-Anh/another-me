@@ -204,7 +204,8 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/api/simulation") {
       if (!input || !Array.isArray(input.answers) || input.answers.length > 20 || !input.answers.every(a => a && typeof a.id === "string" && typeof a.answer === "string" && a.answer.length <= 4000)
         || input.context && (typeof input.context !== "object" || Array.isArray(input.context))
-        || [input.context?.profile_feedback, input.context?.contradiction_feedback, input.context?.profile?.inferred_information, input.context?.profile?.contradictions, input.seen_scenarios, input.discussed_questions].some(value => value !== undefined && !Array.isArray(value))) {
+        || [input.context?.profile_feedback, input.context?.contradiction_feedback, input.context?.profile?.inferred_information, input.context?.profile?.contradictions, input.context?.rejected_interpretations, input.seen_scenarios, input.discussed_questions].some(value => value !== undefined && !Array.isArray(value))
+        || (input.context?.rejected_interpretations || []).some(r => typeof r !== "string" || r.length > 400)) {
         json(response, 400, { error: "Please review your answers before generating a simulation." }); return;
       }
       const lists = input.context || {};
@@ -233,7 +234,8 @@ const server = http.createServer(async (request, response) => {
       const cancel = () => { if (!response.writableEnded) controller.abort(); };
       response.on("close", cancel);
       try {
-        const result = await adapter.createIdentityProfile(input.answers, { signal: controller.signal });
+        const rejected = Array.isArray(input.rejected_interpretations) ? input.rejected_interpretations.filter(r => typeof r === "string" && r.length <= 400).slice(0, 6) : [];
+        const result = await adapter.createIdentityProfile(input.answers, { signal: controller.signal, rejected });
         if (!response.destroyed) json(response, 200, { profile: result.data });
       } catch (error) {
         if (timedOut) throw Object.assign(new Error("Profile deadline reached."), { code: "timeout", statusCode: 504 });

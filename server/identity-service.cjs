@@ -204,7 +204,7 @@ async function createStructuredOutput({ instructions, input, buildInput, client:
   }
 }
 
-async function createIdentityProfile(answers, { signal } = {}) {
+async function createIdentityProfile(answers, { signal, rejected = [] } = {}) {
   const inputErrors = validateParticipantAnswers(answers);
   if (inputErrors.length) {
     throw new IdentityLogicError("invalid_input", "Participant answers are invalid.", 400, inputErrors);
@@ -212,7 +212,7 @@ async function createIdentityProfile(answers, { signal } = {}) {
 
   return createStructuredOutput({
     instructions: PROFILE_CONSTRUCTION_PROMPT,
-    input: { participant_answers: answers },
+    input: { participant_answers: answers, rejected_interpretations: rejected },
     name: "identity_profile",
     schema: identityProfileSchema,
     transform: (profile) => sanitizeIdentityProfile(profile, answers),

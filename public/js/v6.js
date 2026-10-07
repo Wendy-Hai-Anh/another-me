@@ -109,7 +109,7 @@
   const screen = (kind, inner) => `<div class="screen screen--${kind}">${inner}</div>`;
   const answerById = id => readableAnswers().find(a => a.id === id);
   // Evidence shows what the participant actually said; question numbers stay a faint source note.
-  function evidence(ids, extra = "", summary = "Why do you think that?", keep = "") {
+  function evidence(ids, extra = "", summary = "Why this interpretation?", keep = "") {
     const items = (ids || []).map(answerById).filter(Boolean);
     const list = items.map(a => `<li>${tag("you")}<p class="evidence-quote">${esc(a.answer)}</p><p class="source-note">in reply to: ${esc(clip(a.question, 140))}</p></li>`).join("");
     return `<details class="evidence" ${keep ? `data-keep="${keep}"` : ""}><summary>${summary}</summary><div class="evidence-body">${extra}${list ? `<ul class="evidence-list">${list}</ul>` : '<p class="hint">No specific answer was cited.</p>'}</div></details>`;
@@ -289,7 +289,12 @@
     const a = s.supplied.answers.find(r => r.id === key);
     return a ? { text: a.text || "", origin: a.textOrigin, question: a.question, id: a.id } : { text: "", origin: "typed", question: "", id: key };
   };
-  const rejectedClaims = () => Object.values(conv().speculations).filter(sp => sp.reaction === "isnt").map(sp => sp.claim).slice(0, 6);
+  const rejectedClaims = () => {
+    const c = conv(), list = Object.values(c.speculations).filter(sp => sp.reaction === "isnt").map(sp => sp.claim);
+    if (c.review?.sent && c.review.resolution === "premise_rejected") list.push(c.review.comparison);
+    return list.slice(0, 6);
+  };
+  window.rejectedInterpretations = () => rejectedClaims();
   function imageReadingFor() {
     const r = conv().image;
     return r?.status === "done" && r.forBlob === sessionState.supplied.image?.blob ? { observation: r.reading.observation, interpretation: r.reading.interpretation } : null;
@@ -438,7 +443,7 @@
   }
   const profileForUse = () => { const p = sessionState.inferred.profile; return p ? { ...p, contradictions: (p.contradictions || []).filter(c => !explainedContradiction(c)) } : p; };
   const baseIdentityContext = identityContext;
-  window.identityContext = () => ({ ...baseIdentityContext(), profile: profileForUse() });
+  window.identityContext = () => ({ ...baseIdentityContext(), profile: profileForUse(), rejected_interpretations: rejectedClaims() });
   const profileStale = () => !!sessionState.inferred.profile && sessionState.inferred.mode !== "mock" && JSON.stringify(sessionState.inferred.profileAnswers || []) !== JSON.stringify(readableAnswers());
   const synthesisAnswers = () => readableAnswers().filter(a => /^(image_story|story_followup|question_\d(_followup)?|reaction_story|correction_story)$/.test(a.id));
 
@@ -523,10 +528,10 @@
   }
   function why(key, sp) {
     const quotes = (sp.evidence || []).map(e => { const a = answerById(e.source_id); return `<li><p class="evidence-quote">“${esc(unquote(e.quote))}”</p>${a ? `<p class="source-note">You, in reply to: ${esc(clip(a.question, 110))}</p>` : ""}</li>`; }).join("");
-    return `<details class="evidence why" data-keep="why-${key}"><summary>Why do you think that?</summary><div class="evidence-body">
+    return `<details class="evidence why" data-keep="why-${key}"><summary>Why this interpretation?</summary><div class="evidence-body">
       <div class="why__part">${tag("you", "WHAT YOU SAID")}${quotes ? `<ul class="evidence-list">${quotes}</ul>` : '<p class="hint">No exact words were cited.</p>'}</div>
-      <div class="why__part">${tag("model", "WHAT I INFERRED")}<p>${esc(sp.inferred)}</p></div>
-      <div class="why__part">${tag("uncertain", "WHAT I CAN'T KNOW")}<p>${esc(sp.unknown)}</p></div></div></details>`;
+      <div class="why__part">${tag("model", "THE CONNECTION I MADE")}<p>${esc(sp.inferred)}</p></div>
+      <div class="why__part">${tag("uncertain", "WHAT REMAINS UNKNOWN")}<p>${esc(sp.unknown)}</p></div></div></details>`;
   }
   function conversationScreen(key, { thumb = "", meta = "" } = {}) {
     const m = moment(key), row = answerRow(key), target = `extra:${key}-followup`;
@@ -607,7 +612,7 @@
     if (!result && !entry.note) entry.note = "failed";
     c.review = reviewFrom(result, entry.mode);
     // A tension replaces the bold reading (the server never returns both).
-    if (!c.review || c.review.kind !== "tension") {
+    {
       if (result?.interpretation?.offer) c.speculations.synthesis = { claim: result.interpretation.claim, inferred: result.interpretation.inferred, unknown: result.interpretation.unknown, evidence: result.interpretation.evidence || [], reaction: "", explanation: "", mode: entry.mode };
     }
     if (s.currentStage === 3 && s.questionIndex >= questions.length && c.s3 === "reading") c.s3 = phaseAfterSynthesis();
@@ -813,8 +818,8 @@
   }
   function predictionWhy(prediction) {
     const against = (prediction.conflicting_evidence_ids || []).map(answerById).filter(Boolean);
-    const extra = `<div class="why__part">${tag("model", "WHAT I INFERRED")}<p>${esc(prediction.uncertainty_statement || "")}</p></div>${against.length ? `<div class="why__part">${tag("conflict", "WHAT POINTS THE OTHER WAY")}<ul class="evidence-list">${against.map(a => `<li><p class="evidence-quote">${esc(a.answer)}</p><p class="source-note">in reply to: ${esc(clip(a.question, 140))}</p></li>`).join("")}</ul></div>` : ""}${prediction.alternative_possible_response ? `<div class="why__part">${tag("uncertain", "ANOTHER POSSIBILITY")}<p>${esc(unquote(prediction.alternative_possible_response))}</p></div>` : ""}`;
-    return evidence(prediction.evidence_ids, extra, "Why do you think that?", "why-prediction");
+    const extra = `<div class="why__part">${tag("model", "THE CONNECTION I MADE")}<p>${esc(prediction.uncertainty_statement || "")}</p></div>${against.length ? `<div class="why__part">${tag("conflict", "WHAT POINTS THE OTHER WAY")}<ul class="evidence-list">${against.map(a => `<li><p class="evidence-quote">${esc(a.answer)}</p><p class="source-note">in reply to: ${esc(clip(a.question, 140))}</p></li>`).join("")}</ul></div>` : ""}${prediction.alternative_possible_response ? `<div class="why__part">${tag("uncertain", "ANOTHER POSSIBILITY")}<p>${esc(unquote(prediction.alternative_possible_response))}</p></div>` : ""}`;
+    return evidence(prediction.evidence_ids, extra, "Why this interpretation?", "why-prediction");
   }
   function situationScreen() {
     const s = sessionState, p = ui().s4Pred, prediction = s.predicted.predictions[0], answered = !!s.predicted.participantAnswers[0]?.text?.trim();
@@ -995,7 +1000,7 @@
     if (actual?.trim()) answers.push({ id: "actual_prediction_answer", question: predictionTarget, answer: actual });
     const proxy = sessionState.generated.proxyResponses[0];
     if (proxy?.feedback === "corrected" && proxy.correction?.trim()) answers.push({ id: "proxy_correction", question: `How I would actually reply to: "${proxyMessage}"`, answer: proxy.correction.trim() });
-    return { scenario: "overlooked-helper", answers: answers.slice(0, 20), context: { profile: profileForUse(), profile_feedback: sessionState.inferred.participantFeedback, contradiction_feedback: sessionState.inferred.contradictionFeedback }, discussed_questions: [...questions, dilemma, proxyQuestion], seen_scenarios: [] };
+    return { scenario: "overlooked-helper", answers: answers.slice(0, 20), context: { profile: profileForUse(), rejected_interpretations: rejectedClaims(), profile_feedback: sessionState.inferred.participantFeedback, contradiction_feedback: sessionState.inferred.contradictionFeedback }, discussed_questions: [...questions, dilemma, proxyQuestion], seen_scenarios: [] };
   }
   function revision() { const value = simInput(); delete value.seen_scenarios; return JSON.stringify(value); }
   function maybeStartScene() {
@@ -1013,19 +1018,39 @@
       return `<li>${tag(e.type === "inferred" ? "model" : "you")}<p class="evidence-quote">${esc(src?.text || "This source is no longer eligible.")}</p><p class="source-note">${esc(clip(src?.label || e.source, 140))}</p><p>${tag("generated", "HOW IT WAS USED")} ${esc(e.interpretation)}</p></li>`;
     }).join("");
     const conflicts = item.contradictory_evidence.map(c => `<li>${tag("conflict")}<p>${esc(c.description)}</p>${c.participant_explanation ? `<p>${tag("you", "YOUR EXPLANATION")} ${esc(c.participant_explanation)}</p>` : ""}</li>`).join("");
-    return `<ul class="evidence-list">${rows}${conflicts}</ul><p>${tag("uncertain")} ${esc(item.confidence)} confidence. ${esc(item.uncertainty_statement)}</p><p>${tag("generated", "ANOTHER POSSIBLE ACTION")} ${esc(item.alternative_action)}</p><p>${tag("uncertain", "UNKNOWN")} ${item.unknowns.map(esc).join(" ") || "The actual outcome is unknown."}</p>`;
+    const basis = `${item.recognised_reasoning ? `<div class="why__part">${tag("you", "REASONING I RECOGNISED FROM YOU")}<p>${esc(item.recognised_reasoning)}</p></div>` : ""}${item.invented_leap ? `<div class="why__part">${tag("generated", "THE LEAP I MADE")}<p>${esc(item.invented_leap)}</p></div>` : ""}`;
+    return `${basis}<ul class="evidence-list">${rows}${conflicts}</ul><p>${tag("uncertain")} ${esc(item.confidence)} confidence. ${esc(item.uncertainty_statement)}</p><p>${tag("generated", "ANOTHER POSSIBLE ACTION")} ${esc(item.alternative_action)}</p><p>${tag("uncertain", "UNKNOWN")} ${item.unknowns.map(esc).join(" ") || "The actual outcome is unknown."}</p>`;
   }
-  // Presentation only: the saved structured result becomes one passage, in the order a moment unfolds.
+  // Presentation only: the saved structured result becomes one scene, in the order a moment unfolds.
+  const SCENE_PARTS = [["thought", "predicted_thought", "Your first reaction"], ["decision", "predicted_decision", "The decision"], ["words", "predicted_dialogue", "What you say"], ["action", "predicted_action", "What you do"], ["consequence", "predicted_consequence", "What follows"]];
+  const sceneText = (item, field) => field === "predicted_dialogue" ? (item.predicted_dialogue ? `“${unquote(item.predicted_dialogue)}”` : "") : item[field] || "";
   function narrative(item) {
-    const words = item.predicted_dialogue ? `<p>You might say, <q>${esc(unquote(item.predicted_dialogue))}</q></p>` : "";
-    return `<p class="narrative__context">${esc(item.scenario)}</p><p class="narrative__inner">${esc(item.predicted_thought)}</p>${words}<p>${esc(item.predicted_decision)}</p><p>${esc(item.predicted_action)}</p><p>${esc(item.predicted_consequence)}</p><p class="narrative__uncertain">${esc(item.uncertainty_statement)}</p>`;
+    const parts = SCENE_PARTS.map(([key, field]) => { const text = sceneText(item, field); return text ? `<p class="${key === "thought" ? "narrative__inner" : key === "words" ? "narrative__speech" : ""}">${esc(text)}</p>` : ""; }).join("");
+    return `<p class="narrative__context">${esc(item.scenario)}</p>${parts}<p class="narrative__uncertain">${esc(item.uncertainty_statement)}</p>`;
+  }
+  // Optional and lightweight: which part felt like them, which was a leap, and whether the leap is in the
+  // action, the motive or the wording. It stays with the scene; it never becomes a memory or evidence.
+  const LEAP_ASPECTS = [["action", "What I'd do"], ["motive", "Why I'd do it"], ["wording", "How I'd say it"]];
+  function sceneReactions(item) {
+    const parts = ui().simulationFeedback.parts ||= {};
+    const rows = SCENE_PARTS.filter(([, field]) => sceneText(item, field)).map(([key, field, label]) => {
+      const p = parts[key] || {};
+      const leap = p.mark === "leap" ? `<div class="choices choices--small" role="group" aria-label="What was the leap in ${esc(label.toLowerCase())}?">${LEAP_ASPECTS.map(([value, caption]) => `<button type="button" class="choice" data-v6="scene-aspect" data-part="${key}" data-value="${value}" aria-pressed="${p.aspect === value}">${caption}</button>`).join("")}</div>
+        <div class="inline-field"><label class="sr-only" for="sceneNote-${key}">Say more (optional)</label><input class="scene-note" id="sceneNote-${key}" data-part="${key}" maxlength="300" placeholder="Say more, if you want" value="${esc(p.note || "")}"></div>` : "";
+      return `<li class="sentence ${p.mark === "like" ? "is-mine" : p.mark === "leap" ? "is-never" : ""}"><p class="column-label">${label.toUpperCase()}</p><p class="sentence__text">${esc(clip(sceneText(item, field), 220))}</p>
+        <div class="choices choices--small" role="group" aria-label="${esc(label)}"><button type="button" class="choice" data-v6="scene-mark" data-part="${key}" data-value="like" aria-pressed="${p.mark === "like"}">This felt like me</button><button type="button" class="choice" data-v6="scene-mark" data-part="${key}" data-value="leap" aria-pressed="${p.mark === "leap"}">A leap I wouldn't make</button></div>${leap}</li>`;
+    }).join("");
+    return `<details class="evidence scene-reactions" data-keep="scene-reactions"><summary>Which detail felt specifically like you? Where did I make a leap you wouldn't make?</summary><div class="evidence-body"><p class="hint">Optional. Mark any part; you can agree with what the scene does and still disagree with why.</p><ol class="sentence-list">${rows}</ol></div></details>`;
   }
   const simLabel = () => ui().simulationMode === "mock" ? tag("generated", "FICTIONAL SCENE · PREPARED DEMONSTRATION, NOT AI") : tag("generated", "FICTIONAL AI-GENERATED SCENE");
   const simWarning = () => `<p class="hypothetical-warning"><strong>This never happened.</strong> It is a possible situation the AI produced from its interpretation of you. It is not a memory, and it is never used as evidence about you.</p>`;
   function finalScreen() {
     const f = sessionState.feedback;
     const choices = ["Yes", "Partly", "No", "Unsure"].map(v => `<button type="button" class="choice" data-action="feedback-choice" data-field="feelsLikeYou" data-value="${v}" aria-pressed="${f.feelsLikeYou === v}">${v}</button>`).join("");
-    const wrong = ["Partly", "No"].includes(f.feelsLikeYou) ? `<fieldset class="wrong-parts"><legend>What did this version of you get wrong? (optional)</legend><div class="choices" role="group">${wrongParts.map(p => `<button type="button" class="choice" data-v6="wrong-part" data-value="${p}" aria-pressed="${(f.wrongParts || []).includes(p)}">${p}</button>`).join("")}</div></fieldset>
+    const marked = Object.entries(ui().simulationFeedback.parts || {}).filter(([, p]) => p.mark === "leap");
+    const alreadyMarked = marked.length ? `<p class="hint">You already marked ${marked.length === 1 ? "one part" : `${marked.length} parts`} of the scene as a leap you wouldn't make.</p>` : "";
+    const wrong = ["Partly", "No"].includes(f.feelsLikeYou) && marked.length ? `${alreadyMarked}<div class="inline-field"><label for="finalExplanation">If you want, say more.</label><textarea id="finalExplanation" maxlength="1200" placeholder="Optional">${esc(f.finalExplanation || "")}</textarea></div>`
+      : ["Partly", "No"].includes(f.feelsLikeYou) ? `<fieldset class="wrong-parts"><legend>What did this version of you get wrong? (optional)</legend><div class="choices" role="group">${wrongParts.map(p => `<button type="button" class="choice" data-v6="wrong-part" data-value="${p}" aria-pressed="${(f.wrongParts || []).includes(p)}">${p}</button>`).join("")}</div></fieldset>
       <div class="inline-field"><label for="finalExplanation">If you want, say more.</label><textarea id="finalExplanation" maxlength="1200" placeholder="Optional">${esc(f.finalExplanation || "")}</textarea></div>` : "";
     return screen("final", `${head("Does this still feel like you?", { promptKey: "final-question", meta: "The last question" })}
       <p class="hint">${simLabel()} The scene before this was generated, not remembered.</p><div class="choices choices--large" role="group" aria-label="Does this still feel like you">${choices}</div>${wrong}`);
@@ -1042,7 +1067,8 @@
     }
     return screen("narrative", `<div class="narrative-wrap">${simLabel()}<p class="screen-id"><span class="screen-id__num">06</span>${esc(stages[5][0])}<span class="screen-id__meta">${esc(item.scenario_title)}</span></p>
       <h2 class="narrative-title">One possible version of you.</h2><article class="narrative">${narrative(item)}</article>${simWarning()}
-      <details class="evidence" data-keep="scene-evidence"><summary>Why do you think that?</summary><div class="evidence-body">${simEvidence(item)}</div></details>
+      <details class="evidence" data-keep="scene-evidence"><summary>Why this interpretation?</summary><div class="evidence-body">${simEvidence(item)}</div></details>
+      ${sceneReactions(item)}
       ${row(act("delete-simulation", "Delete this scene", "btn-tertiary danger"))}</div>`);
   };
   window.generateFiction = async function generateSimulation(forceMock = false) {
@@ -1188,7 +1214,7 @@
     if (replies.length) dataContent.insertAdjacentHTML("beforeend", `<section class="data-section"><h3>Your answers to the model's uncertainties</h3>${replies.map((r, i) => `${source("supplied", r.verdict === "private" ? "KEPT PRIVATE" : r.verdict === "irrelevant" ? "DISMISSED" : "EXPLAINED")}<div class="data-item"><strong>${esc(r.text)}</strong><p>${esc(r.explanation || "(no explanation)")}</p>${row(act("delete-uncertainty", "Delete this item", "btn-tertiary danger", `data-index="${i}"`))}</div>`).join("")}</section>`);
     if (sessionState.supplied.cloneSample) dataContent.insertAdjacentHTML("beforeend", `<section class="data-section"><h3>Voice sample for cloning</h3>${source("supplied", "CLONING SAMPLE")}<audio controls src="${sessionState.supplied.cloneSample.url}"></audio>${row(act("delete-clone-sample", "Delete voice sample", "btn-tertiary danger"))}</section>`);
     const item = sessionState.generated.simulation;
-    if (item) dataContent.insertAdjacentHTML("beforeend", `<section class="data-section"><h3>Fictional scene</h3>${source("invented", "FICTIONAL · NEVER EVIDENCE")}<p>${core.warning}</p>${ui().simulationRevision !== revision() ? '<p class="warning">Historical: your information changed after this was generated.</p>' : ""}<div class="narrative narrative--small">${narrative(item)}</div>${row(act("delete-simulation", "Delete this scene", "btn-tertiary danger"))}</section>`);
+    if (item) dataContent.insertAdjacentHTML("beforeend", `<section class="data-section"><h3>Fictional scene</h3>${source("invented", "FICTIONAL · NEVER EVIDENCE")}<p>${core.warning}</p>${ui().simulationRevision !== revision() ? '<p class="warning">Historical: your information changed after this was generated.</p>' : ""}<div class="narrative narrative--small">${narrative(item)}</div>${Object.keys(ui().simulationFeedback.parts || {}).length ? `${source("supplied", "YOUR REACTIONS TO THE SCENE")}<ul>${Object.entries(ui().simulationFeedback.parts).map(([k, p]) => `<li>${esc((SCENE_PARTS.find(([key]) => key === k) || [])[2] || k)}: ${p.mark === "like" ? "felt like me" : `a leap I wouldn't make${p.aspect ? ` (${esc((LEAP_ASPECTS.find(([v]) => v === p.aspect) || [])[1] || "")})` : ""}`}${p.note ? ` · ${esc(p.note)}` : ""}</li>`).join("")}</ul>` : ""}${row(act("delete-simulation", "Delete this scene", "btn-tertiary danger"))}</section>`);
   };
   function deleteConversationItem(key) {
     const c = conv();
@@ -1353,6 +1379,8 @@
     else if (v6 === "review-misunderstood") { if (u.conv.review) u.conv.review.misunderstood = false; }
     else if (v6 === "mark-sentence") { const x = s.generated.proxyResponses[0]?.sentences?.[Number(button.dataset.index)]; if (x) x.mark = ""; }
     else if (v6 === "feedback-answer") { if (!["sending", "sent"].includes(u.feedback.state)) delete u.feedback.answers[button.dataset.q]; }
+    else if (v6 === "scene-mark") { const parts = u.simulationFeedback.parts || {}; delete parts[button.dataset.part]; }
+    else if (v6 === "scene-aspect") { const p = (u.simulationFeedback.parts || {})[button.dataset.part]; if (p) delete p.aspect; }
     else if (v6 === "wrong-part") s.feedback.wrongParts = (s.feedback.wrongParts || []).filter(p => p !== button.dataset.value);
     else if (old === "feedback-choice") { delete s.feedback[button.dataset.field]; if (button.dataset.field === "feelsLikeYou") s.ui.fictionAnswered = false; }
     status("Choice removed.");
@@ -1689,6 +1717,7 @@
       const key = s.currentStage === 2 ? "story" : `question_${s.questionIndex + 1}`, m = c.moments[key];
       if (m?.followUp) { m.followUp.text = event.target.value; m.followUp.origin = "typed"; }
     }
+    if (event.target.classList?.contains("scene-note")) { const p = (ui().simulationFeedback.parts ||= {})[event.target.dataset.part]; if (p) p.note = event.target.value; }
     if (id === "reactionExplanation") { const sp = c.speculations[event.target.dataset.key]; if (sp) sp.explanation = event.target.value; }
     if (id === "reviewText" && c.review) { c.review.response = { text: event.target.value, origin: "typed" }; }
     if (id === "reviewClarifyText" && c.review?.clarification) { c.review.clarification.text = event.target.value; c.review.clarification.origin = "typed"; }
@@ -1799,6 +1828,8 @@
       u.editingSentence = null; drafts.delete("sentenceEdit"); acknowledge = "proxy"; render(); return;
     }
     if (action === "cancel-sentence") { u.editingSentence = null; drafts.delete("sentenceEdit"); render(); return; }
+    if (action === "scene-mark") { const parts = u.simulationFeedback.parts ||= {}; const p = parts[button.dataset.part] ||= {}; p.mark = button.dataset.value; if (p.mark !== "leap") { delete p.aspect; } room.react(p.mark === "leap" ? "reject" : "revise"); render(); return; }
+    if (action === "scene-aspect") { const p = (u.simulationFeedback.parts ||= {})[button.dataset.part]; if (p) p.aspect = button.dataset.value; render(); return; }
     if (action === "wrong-part") { const list = s.feedback.wrongParts ||= []; if (!list.includes(button.dataset.value)) list.push(button.dataset.value); render(); return; }
     if (action === "feedback-answer") { if (!["sending", "sent"].includes(u.feedback.state)) { u.feedback.answers[button.dataset.q] = button.dataset.value; if (u.feedback.state === "unavailable") u.feedback.state = "idle"; } render(); return; }
     if (action === "send-feedback") return sendFeedback();

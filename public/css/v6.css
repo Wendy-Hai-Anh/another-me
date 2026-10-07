@@ -238,6 +238,8 @@ audio{display:block;width:100%;max-width:440px;height:40px}
 .opening__title--split{max-width:none;font-size:clamp(1.9rem,1rem + 3.4vw,4.2rem)}
 .opening__title--split span{display:block;white-space:nowrap}
 .opening__lede{font-size:clamp(1.02rem,.9rem + .4vw,1.2rem);line-height:1.55;max-width:46ch;color:var(--fg)}
+/* The intro sentence sits on two balanced lines on desktop (it still wraps naturally on phones). */
+.opening .opening__lede{max-width:min(72ch,100%);text-wrap:balance}
 .opening__note{font-size:14.5px;color:var(--muted);max-width:48ch}
 .opening__more{display:flex;flex-wrap:wrap;justify-content:center;gap:4px 24px;font-size:14px;color:var(--muted);max-width:620px}
 .opening__more details{text-align:left}
@@ -717,3 +719,9 @@ body.is-passing .scrim{opacity:.18}
 /* ---------- end of Stage 3: one review of a tension or open question ---------- */
 .review-comparison{display:flex;flex-direction:column;gap:8px;max-width:68ch;padding-left:16px;border-left:2px solid rgb(var(--inferred-rgb) / .55)}
 .review-comparison__text{font:400 clamp(1.02rem,.95rem + .35vw,1.18rem)/1.6 var(--serif);color:var(--fg)}
+
+/* ---------- Stage 6: the spoken line, and optional reactions to the scene ---------- */
+.narrative__speech{padding-left:16px;border-left:2px solid rgb(var(--generated-rgb) / .5);font-style:italic}
+.scene-reactions .sentence-list{margin-top:4px}
+.scene-note{width:100%;min-height:40px;padding:8px 12px;border-radius:10px;border:1px solid rgb(var(--fg-rgb) / .2);background:var(--field);color:var(--fg);font:15px/1.4 var(--sans)}
+.scene-note:focus{border-color:var(--accent)}

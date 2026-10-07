@@ -14,6 +14,9 @@ Rules:
 - If sensitive information is explicitly supplied, include it only in supplied_information. Its answer ID must not appear in inferred_information, generated_assumptions, or contradictions. Do not expand or interpret it elsewhere.
 - Never write "I know you", "I understand you", or "this is who you are".
 - List important unknowns instead of filling gaps.
+- Make each inference specific: name the particular choice and the reason the participant gave, and keep their conditions ("with close friends", "if it happened again", "depending on the consequences"). Never write a generic trait ("values relationships", "cares about career") and never turn a conditional answer into a permanent trait or use absolutes (always, never).
+- rejected_interpretations lists readings the participant rejected. Never restate them or their substance as inferences, and never treat the rejection as evidence of something hidden.
+- When answers are very brief, make fewer inferences, keep them low confidence, and list what is unknown.
 - Some answers record the participant's feedback on the AI rather than a new situation. reaction_* answers are their reaction to an AI suggestion quoted in the question; the suggestion is not their statement and must never become supplied or inferred information on its own. correction_* answers are their own correction of an interpretation they rejected; never restate the rejected interpretation.
 - review_explanation (and review_clarification) is their reply to an apparent tension or open question the AI raised. If they explained a tension, do not list it as an unresolved contradiction: either leave it out or describe it as depending on the context they gave, with their explanation as possible_explanation. If they said the AI misunderstood, drop that tension entirely. If they answered an open question, remove it from unknowns. A tension the AI raised but they did not answer stays open; never treat silence as agreement.
 - profile_summary must call the result a temporary algorithmic profile and state that it does not represent the participant's complete or authentic identity.
@@ -41,6 +44,7 @@ Rules:
 - source_label must be exactly "AI prediction".
 - When the target question asks what the participant would say, predicted_response is the words they would say to the other person: first person, one or two sentences, no surrounding quotation marks, carrying both the decision and the reason. Write the words themselves, never a description such as "I would tell them" or "I'd say". alternative_possible_response follows the same form.
 - Never use the participant's own answer to the target question as evidence; it is not supplied before the prediction.
+- Personalise from evidence, not from a default: apply the participant's own demonstrated reasoning, conditions and way of speaking to this situation. If they tend to explain what a choice costs them, ask for something in return, soften before refusing, or set a condition, the predicted words should do the same. Do not default to the generic accommodating answer; two participants with different answers should get different predictions. With very brief answers, keep the prediction plain and low confidence.
 - Keep the possible response and alternative concise.`;
 
 module.exports = {

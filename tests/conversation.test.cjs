@@ -23,7 +23,7 @@ test("an interpretation must quote the participant exactly and stay tentative", 
 
   // An invented quote is sent back once with the reason, then refused.
   const invented = { ...good, evidence: [{ source_id: "image_story", quote: "I am always calm under pressure" }] };
-  const client = fakeClient(invented, invented);
+  const client = fakeClient(invented, invented, invented);
   await assert.rejects(conversation.reply(replyInput(["acknowledge", "interpret"]), { client }), error => error.code === "invalid_model_output");
   assert.match(client.requests[1].input, /must be copied exactly/);
 });
@@ -61,7 +61,7 @@ test("a Stage 2 interpretation is an assumption about the person, never their an
   const client = fakeClient(summary, summary);
   await assert.rejects(conversation.reply(input, { client }));
   assert.match(client.requests[1].input, /guess about them as a person/);
-  const assumption = { ...summary, about: "routine", text: "You might be someone who runs on deadlines, leaving things until the pressure makes them urgent and then pushing through alone." };
+  const assumption = { ...summary, about: "routine", text: "You pulled an all-nighter for it; you might be someone who leaves things until the pressure makes them urgent, then pushes through alone." };
   assert.equal((await conversation.reply(input, { client: fakeClient(assumption) })).about, "routine");
 });
 
@@ -83,11 +83,14 @@ const tensionOutput = {
   closing: "That is all three."
 };
 
-test("a fair tension replaces the bold reading and the open question", async () => {
-  const result = await conversation.synthesise({ answers }, { client: fakeClient(tensionOutput) });
+test("a fair tension replaces the open question; an interpretation must be about something else", async () => {
+  // The fixture's interpretation cites only one of the tension's answers, so it may stay.
+  const result = await conversation.synthesise({ answers }, { client: fakeClient({ ...tensionOutput, interpretation: { offer: true, claim: "You said a promotion is worth more than a speech. You may judge a promise by what it costs only when the stakes are uncertain.", inferred: "x", unknown: "y", evidence: [{ source_id: "question_3", quote: "A promotion is worth more" }] } }) });
   assert.equal(result.contradiction.present, true);
-  assert.equal(result.interpretation.offer, false);
   assert.equal(result.uncertainty.present, false);
+  assert.equal(result.interpretation.offer, true);
+  const overlapping = { ...tensionOutput, interpretation: { offer: true, claim: "You said keeping your word is everything, yet a promotion is worth more. You may judge promises differently when work is involved.", inferred: "x", unknown: "y", evidence: [{ source_id: "question_1", quote: "Keeping your word is everything to me." }, { source_id: "question_3", quote: "A promotion is worth more" }] } };
+  await assert.rejects(conversation.synthesise({ answers }, { client: fakeClient(overlapping, overlapping) }));
   // Both excerpts must come from two different answers.
   const same = { ...tensionOutput, contradiction: { ...tensionOutput.contradiction, second: tensionOutput.contradiction.first } };
   await assert.rejects(conversation.synthesise({ answers }, { client: fakeClient(same, same) }));
@@ -169,4 +172,34 @@ test("brief answers are never stretched into a revision or a resolved tension", 
   await assert.rejects(conversation.reviewReply(review({ response: "It's different." }), { client: fakeClient(supplied, supplied) }));
   const open = { move: "acknowledge", text: "You see the two situations as different. I'll keep that open rather than guess why.", resolution: "still_open", understanding: "They see the two situations as different." };
   assert.equal((await conversation.reviewReply(review({ response: "It's different." }), { client: fakeClient(open) })).resolution, "still_open");
+});
+
+test("Stage 3 readings stay specific, open to context and conditional when the answer was", async () => {
+  const none = { present: false, first: { source_id: "", quote: "" }, second: { source_id: "", quote: "" }, comparison: "", question: "" };
+  const noDiff = { first: { source_id: "", quote: "" }, second: { source_id: "", quote: "" }, real_difference: false, explained_by_their_words: false };
+  const conditionalAnswers = [
+    { id: "question_1", question: "Q1", answer: "Depends who it is. With a close friend I'd let it go and ask if they're okay. With someone I barely know, I'd stop making plans after the second time." },
+    { id: "question_2", question: "Q2", answer: "If it was the first time, I'd let it slide and talk to them privately. If it happened repeatedly, I'd raise it with the assessor." }
+  ];
+  const reading = claim => ({ difference_check: noDiff, contradiction: none, uncertainty: { present: false, about: "", question: "" }, closing: "That is all three.",
+    interpretation: { offer: true, claim, inferred: "x", unknown: "y", evidence: [{ source_id: "question_1", quote: "With a close friend I'd let it go" }, { source_id: "question_2", quote: "If it happened repeatedly" }] } });
+  const flattened = reading("You said you'd let a close friend go. You may always avoid conflict with people.");
+  await assert.rejects(conversation.synthesise({ answers: conditionalAnswers }, { client: fakeClient(flattened, flattened) }));
+  const generic = reading("You said you'd let a close friend go. You may value relationships but also care about your career when it matters.");
+  await assert.rejects(conversation.synthesise({ answers: conditionalAnswers }, { client: fakeClient(generic, generic) }));
+  const specific = reading("You said you'd let a close friend's cancellation go, but stop after the second time with someone you barely know. You may give slack only where the relationship has already earned it.");
+  assert.equal((await conversation.synthesise({ answers: conditionalAnswers }, { client: fakeClient(specific) })).interpretation.offer, true);
+});
+
+test("sparse answers get no interpretation and no tension, at most an open question", async () => {
+  const sparse = [{ id: "question_1", question: "Q1", answer: "It's fine." }, { id: "question_2", question: "Q2", answer: "Nothing." }, { id: "question_3", question: "Q3", answer: "Wedding." }];
+  const none = { present: false, first: { source_id: "", quote: "" }, second: { source_id: "", quote: "" }, comparison: "", question: "" };
+  const noDiff = { first: { source_id: "", quote: "" }, second: { source_id: "", quote: "" }, real_difference: false, explained_by_their_words: false };
+  const overreach = { difference_check: noDiff, contradiction: none, uncertainty: { present: false, about: "", question: "" }, closing: "That is all three.",
+    interpretation: { offer: true, claim: "You said it's fine. You may put weight on harmony when things go wrong.", inferred: "x", unknown: "y", evidence: [{ source_id: "question_1", quote: "It's fine." }] } };
+  const client = fakeClient(overreach, overreach, overreach);
+  await assert.rejects(conversation.synthesise({ answers: sparse }, { client }));
+  assert.match(client.requests[0].input, /"sparse":true/);
+  const open = { ...overreach, interpretation: { offer: false, claim: "", inferred: "", unknown: "", evidence: [] }, uncertainty: { present: true, about: "I don't know yet what would make you say more than a few words.", question: "What would make you speak up instead of saying it's fine?" } };
+  assert.equal((await conversation.synthesise({ answers: sparse }, { client: fakeClient(open) })).uncertainty.present, true);
 });
