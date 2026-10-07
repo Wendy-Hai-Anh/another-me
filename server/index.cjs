@@ -156,7 +156,7 @@ const server = http.createServer(async (request, response) => {
       if (!token || Buffer.byteLength(given) !== Buffer.byteLength(token) || !require("node:crypto").timingSafeEqual(Buffer.from(given), Buffer.from(token))) { json(response, 401, { error: "Not allowed." }); return; }
       headers(response, "application/x-ndjson; charset=utf-8"); response.writeHead(200).end(await feedback.exportAll()); return;
     }
-    if (request.method !== "POST" || !["/api/transcribe","/api/profile","/api/predict","/api/proxy","/api/fiction","/api/simulation","/api/cloned-speech","/api/talking-avatar","/api/image-reading","/api/reply","/api/synthesis","/api/feedback"].includes(url.pathname)) { json(response, 404, { error: "Not found." }); return; }
+    if (request.method !== "POST" || !["/api/transcribe","/api/profile","/api/predict","/api/proxy","/api/fiction","/api/simulation","/api/cloned-speech","/api/talking-avatar","/api/image-reading","/api/reply","/api/synthesis","/api/review","/api/feedback"].includes(url.pathname)) { json(response, 404, { error: "Not found." }); return; }
     if (!originAllowed(request.headers.origin, request)) { json(response, 403, { error: "This site is not allowed to use the server.", code: "origin_not_allowed" }); return; }
     // Feedback is optional and free to store, so it does not need the AI access code.
     if (accessCode && url.pathname !== "/api/feedback" && !codeMatches(request.headers["x-access-code"])) { json(response, 401, { error: "An access code is needed to use the live AI. Ask the researcher for it.", code: "access_code_required" }); return; }
@@ -200,6 +200,7 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/api/feedback") { json(response, 200, await withCancel(signal => feedback.store(input, { signal }))); return; }
     if (url.pathname === "/api/reply") { json(response, 200, { reply: await withCancel(signal => conversation.reply(input, { signal })) }); return; }
     if (url.pathname === "/api/synthesis") { json(response, 200, { synthesis: await withCancel(signal => conversation.synthesise(input, { signal })) }); return; }
+    if (url.pathname === "/api/review") { json(response, 200, { review: await withCancel(signal => conversation.reviewReply(input, { signal })) }); return; }
     if (url.pathname === "/api/simulation") {
       if (!input || !Array.isArray(input.answers) || input.answers.length > 20 || !input.answers.every(a => a && typeof a.id === "string" && typeof a.answer === "string" && a.answer.length <= 4000)
         || input.context && (typeof input.context !== "object" || Array.isArray(input.context))

@@ -34,6 +34,7 @@
     image: { label: "Image reading", stages: [1], timeoutMs: 25000, loading: "Looking at your image…", success: "", fallback: "" },
     reply: { label: "Response", stages: [2, 3], timeoutMs: 18000, loading: "Thinking about your answer…", success: "", fallback: "" },
     synthesis: { label: "Reading your answers together", stages: [3], timeoutMs: 35000, loading: "Reading your answers together…", success: "", fallback: "" },
+    review: { label: "Your explanation", stages: [3], timeoutMs: 18000, loading: "Thinking about your explanation…", success: "", fallback: "" },
     feedback: { label: "Feedback", stages: [], timeoutMs: 15000, loading: "Sending your feedback…", success: "", fallback: "" }
   });
   operationDefinitions.fiction = { label: "Fictional scene", stages: [6], timeoutMs: 90000, loading: "Writing a fictional scene…", success: "Your fictional scene is ready.", fallback: "" };
@@ -64,14 +65,13 @@
   const proxyContext = "Someone close to you has volunteered you to help with an event this weekend without asking. You had deliberately kept that time free for yourself.";
   const proxyMessage = "I told them you'd help. You're always the reliable one.";
   const s6Intro = "I have your words and some of your choices. Here is a situation you never gave me—and the version of you I made for it.";
-  const tensionChoices = [["circumstances", "Different circumstances"], ["changed", "I changed my mind"], ["misread", "You misunderstood"]];
   const wrongParts = ["The action", "The thoughts", "The way I spoke", "The whole interpretation"];
   const FEEDBACK_QUESTIONS = [["distinguish_sources", "Could you tell what you supplied from what the AI created?"], ["uncertainty_clear", "Was the uncertainty language clear?"], ["gradually_personal", "Did the questions gradually feel more personal?"], ["in_control", "Did you feel in control of your information?"]];
 
   function ui() {
     return sessionState.ui.v6 ||= {
       checkpoint: false, consentPage: 0, messageSeen: false, simulationStep: "intro", simulationRevision: "", simulationMode: "", simulationFeedback: {}, seenScenarios: [], portraitConfirmed: false, proxyView: "response",
-      conv: { image: null, moments: {}, synthesis: null, speculations: {}, tension: null, s3: "questions", detour: false },
+      conv: { image: null, moments: {}, synthesis: null, speculations: {}, review: null, s3: "questions", detour: false },
       s4: "situation", s4Pred: null, s5: null, s6: null, describing: false,
       feedback: { answers: {}, comments: {}, boundary: "", state: "idle", id: "", error: "" }
     };
@@ -157,6 +157,7 @@
     image: ["Looking at your image", "Kept your image. I'll go by what you tell me about it, and nothing about it was guessed."],
     reply: ["Responding to your answer", "Kept your answer exactly as you wrote it and moved on."],
     synthesis: ["Reading your answers together", "Kept your answers and continued without an interpretation."],
+    review: ["Responding to your explanation", "Kept your explanation exactly as you wrote it; it still updates the model of you."],
     feedback: ["Sending your feedback", "Kept everything you chose in the form. Nothing was reported as sent."]
   };
   // Where / what happened / what the system did / what can help. Technical failures and missing information are
@@ -299,12 +300,12 @@
     if (payload.allowed_moves.includes("follow_up") && key !== "story" && words < 12) return { move: "follow_up", text: followUpHints[key], inferred: "", unknown: "", evidence: [] };
     if (key === "story" && payload.allowed_moves.includes("interpret") && answer) {
       const quote = clip(answer.split(/(?<=[.!?])\s/)[0], 120).replace(/…$/, "");
-      const claim = /friend|family|mum|mom|dad|sister|brother|partner|\bwe\b|together|people/i.test(answer) ? "This image might matter less for what it shows than for who was there when it was taken."
-        : /felt|feel|happy|sad|calm|lonely|proud|scared|miss/i.test(answer) ? "You might hold on to how a moment felt for longer than to what actually happened in it."
-          : "Perhaps the image stands in for something you would rather show than explain.";
+      const claim = /friend|family|mum|mom|dad|sister|brother|partner|\bwe\b|together|people/i.test(answer) ? "You might be someone who keeps hold of people long after places change, and who is the one who stays in touch."
+        : /felt|feel|happy|sad|calm|lonely|proud|scared|miss|tired/i.test(answer) ? "You might be someone who remembers how a moment felt long after the details fade, and who goes back to it more than you admit."
+          : "You might be someone who would rather show what matters to you than explain it out loud.";
       return { move: "interpret", text: claim, inferred: "This demonstration matched a few words in your answer to a prepared sentence. No AI read it.", unknown: "Whether any of this is true for you.", evidence: answer.toLowerCase().includes(quote.toLowerCase()) ? [{ source_id: "image_story", quote }] : [] };
     }
-    return { move: "acknowledge", text: "Thank you. I've kept that exactly as you wrote it.", inferred: "", unknown: "", evidence: [] };
+    return { move: "acknowledge", text: "Thank you. I've kept that exactly as you wrote it.", inferred: "", unknown: "", evidence: [], first_impression: key === "story" ? "not_addressed" : "not_applicable" };
   }
   function movesFor(key, m, isFollow) {
     const moves = ["acknowledge"];
@@ -342,6 +343,7 @@
     } else {
       m.reply = r && payload.allowed_moves.includes(r.move) ? { ...r, mode: mockMode ? "demo" : "live" } : null;
       m.note = m.reply ? "" : capabilities?.openai === false ? "config" : "failed";
+      if (key === "story" && m.reply?.first_impression && c.image?.status === "done") c.image.verdict = m.reply.first_impression;
       if (m.reply?.move === "interpret") c.speculations[key] = { claim: r.text, inferred: r.inferred, unknown: r.unknown, evidence: r.evidence || [], reaction: "", explanation: "", mode: m.reply.mode };
       m.status = "responded";
     }
@@ -367,10 +369,14 @@
     if (!s.started || atCheckpoint()) return null;
     if (s.currentStage === 2 && moment("story").status === "following") return "extra:story-followup";
     if (s.currentStage === 3 && s.questionIndex < questions.length) { const key = `question_${s.questionIndex + 1}`; if (moment(key).status === "following") return `extra:${key}-followup`; }
+    if (s.currentStage === 3 && s.questionIndex >= questions.length && conv().s3 === "review" && conv().review) return conv().review.status === "clarifying" ? "extra:review-clarify" : conv().review.status === "asking" ? "extra:review" : null;
     if (s.currentStage === 4 && ui().s4 === "answer") return "prediction-answer";
     return null;
   };
   window.applyExtraTranscript = (target, transcript) => {
+    const r = conv().review;
+    if (target === "extra:review" && r) { r.response = { text: transcript, origin: "transcribed" }; return; }
+    if (target === "extra:review-clarify" && r?.clarification) { r.clarification.text = transcript; r.clarification.origin = "transcribed"; return; }
     const m = conv().moments[String(target).replace(/^extra:/, "").replace(/-followup$/, "")];
     if (m?.followUp) { m.followUp.text = transcript; m.followUp.origin = "transcribed"; }
   };
@@ -399,8 +405,14 @@
       if (sp.reaction === "isnt") { if (sp.explanation?.trim()) answers.push({ id: `correction_${key}`, question: "Something the AI got wrong about me, in my own words", answer: sp.explanation.trim() }); }
       else answers.push({ id: `reaction_${key}`, question: `The AI suggested: "${sp.claim}" Does that fit?`, answer: `${sp.reaction === "fits" ? "That fits." : "Partly, but it stretched it."}${sp.explanation?.trim() ? ` ${sp.explanation.trim()}` : ""}` });
     }
-    const t = c.tension;
-    if (t?.choice && t.choice !== "skip") answers.push({ id: "tension_explanation", question: `Two of my answers seemed to pull in different directions ("${t.first.quote}" and "${t.second.quote}"). What makes these situations different for me?`, answer: `${tensionChoices.find(([v]) => v === t.choice)?.[1] || ""}.${t.explanation?.trim() ? ` ${t.explanation.trim()}` : ""}` });
+    // The review: the AI's comparison stays in the question (never as something the participant said);
+    // only their own explanation is the answer. A skipped review adds nothing and is not agreement.
+    const rv = c.review;
+    if (rv?.sent && rv.status !== "skipped") {
+      const said = `${rv.misunderstood ? "You misunderstood." : ""} ${rv.response.text.trim()}`.trim();
+      if (said) answers.push({ id: "review_explanation", question: `The AI ${rv.kind === "tension" ? "noticed" : "was unsure"}: "${rv.comparison}" It asked: ${rv.question}`, answer: said });
+      if (rv.clarification?.text?.trim()) answers.push({ id: "review_clarification", question: rv.clarification.question, answer: rv.clarification.text.trim() });
+    }
     uncertaintyReplies().filter(r => r.verdict !== "private" && r.explanation?.trim()).slice(0, 3).forEach((r, i) => {
       answers.push({ id: `uncertainty_${i + 1}`, question: `The model was unsure: ${r.text}`, answer: r.explanation.trim() });
     });
@@ -415,8 +427,20 @@
     if (completed && sessionState.inferred.profile) sessionState.inferred.profileAnswers = answers;
     return completed;
   };
+  // The profile later stages use: a tension the participant explained (or said was a misreading) at the end of
+  // Stage 3 is no longer treated as an open contradiction; their explanation stays as a supplied answer.
+  // A skipped or still-open review leaves the tension in place: silence is not agreement.
+  function explainedContradiction(c) {
+    const r = conv().review;
+    if (!r?.sent || r.kind !== "tension" || !["context_dependent", "resolved", "premise_rejected"].includes(r.resolution)) return false;
+    const ids = c.evidence_ids || [], excerpts = (r.excerpts || []).map(e => e?.source_id).filter(Boolean);
+    return ids.some(id => /^review_/.test(id)) || excerpts.length === 2 && excerpts.every(id => ids.includes(id));
+  }
+  const profileForUse = () => { const p = sessionState.inferred.profile; return p ? { ...p, contradictions: (p.contradictions || []).filter(c => !explainedContradiction(c)) } : p; };
+  const baseIdentityContext = identityContext;
+  window.identityContext = () => ({ ...baseIdentityContext(), profile: profileForUse() });
   const profileStale = () => !!sessionState.inferred.profile && sessionState.inferred.mode !== "mock" && JSON.stringify(sessionState.inferred.profileAnswers || []) !== JSON.stringify(readableAnswers());
-  const synthesisAnswers = () => readableAnswers().filter(a => /^(image_story|story_followup|question_\d(_followup)?)$/.test(a.id));
+  const synthesisAnswers = () => readableAnswers().filter(a => /^(image_story|story_followup|question_\d(_followup)?|reaction_story|correction_story)$/.test(a.id));
 
   /* ---------- stage 1: an image, then one look at it ---------- */
   async function downscale(blob, max = 768) {
@@ -457,7 +481,7 @@
     let voice;
     if (!r || r.status === "reading") voice = `${head("Let me look at it.", { meta: "Your image" })}${thinking("Looking at your image")}`;
     else if (r.status === "done") voice = `${head(r.reading.observation, { meta: "What I can see", promptKey: "image-observation" })}
-      <div class="speculation side side--model">${tag("model", "SPECULATIVE AI READING")}<p class="claim">${esc(r.reading.interpretation)}</p>${r.reading.context === "limited" ? '<p class="hint">There isn\'t much context in the image, so this is only a small guess.</p>' : ""}<p class="hint">I only look at what is in the frame, never at faces or appearance.</p></div>`;
+      <div class="speculation side side--model ${r.verdict === "revised" ? "is-context" : ""}">${tag("model", "SPECULATIVE FIRST IMPRESSION")}<p class="claim">${esc(r.reading.interpretation)}</p>${r.reading.basis ? `<p class="hint">From ${esc(r.reading.basis)}.</p>` : ""}${r.verdict === "revised" ? '<p class="revision-note">Revised after you explained the image.</p>' : ""}</div>`;
     else if (r.status === "skipped") voice = `${head("You moved on before I looked closely.", { meta: "Your image" })}${calm("I'll go by what you tell me about it.")}`;
     else {
       const text = r.note === "demo" ? "In this demonstration I can't look at images, so I'll go by what you tell me about it."
@@ -543,25 +567,34 @@
       ${workspace(voiceColumn(a.id, a.audio), wordsColumn({ id: "questionText", text: a.text, origin: a.textOrigin, audio: a.audio, placeholder: "Your answer, in your own words…" }))}`);
   };
 
-  /* ---------- end of stage 3: the answers read together ---------- */
-  const phaseAfterSynthesis = () => { const c = conv(); return c.tension ? (c.tension.choice ? "tension-ask" : "tension") : c.speculations.synthesis ? "speculation" : "closing"; };
+  /* ---------- end of stage 3: the answers read together, then one review ---------- */
+  // Order after the third situation: an optional bold reading of all three answers, then one review of the
+  // most meaningful tension (or, if there is none, one genuine open question). Nothing is invented to fill it.
+  const phaseAfterSynthesis = () => { const c = conv(); return c.speculations.synthesis ? "speculation" : c.review && c.review.status !== "skipped" ? "review" : "closing"; };
   function startReading() {
     const s = sessionState, c = conv(), signature = JSON.stringify(synthesisAnswers());
     c.detour = false;
     if (c.synthesis && c.synthesis.signature === signature && c.synthesis.status !== "thinking") { c.s3 = phaseAfterSynthesis(); render(); return; }
-    c.tension = null; delete c.speculations.synthesis;
+    c.review = null; delete c.speculations.synthesis;
     const entry = c.synthesis = { status: "thinking", startedAt: Date.now(), signature, ticket: ++synthTicket, note: "", result: null, mode: "" };
     c.s3 = "reading"; render();
     // The model of you is built alongside; Stage 4 waits for it if it is still running.
     if (!s.inferred.profile && !activeOperations.has("identity") && readableAnswers().some(a => a.id.startsWith("question_"))) void generateProfile();
     void runSynthesis(entry);
   }
+  function reviewFrom(result, mode) {
+    const base = { status: "asking", misunderstood: false, response: { text: "", origin: "typed" }, clarification: null, ack: "", resolution: "", understanding: "", note: "", sent: false, mode, ticket: 0 };
+    if (result?.contradiction?.present) return { ...base, kind: "tension", comparison: result.contradiction.comparison, question: result.contradiction.question, excerpts: [result.contradiction.first, result.contradiction.second] };
+    if (result?.uncertainty?.present) return { ...base, kind: "uncertainty", comparison: result.uncertainty.about, question: result.uncertainty.question, excerpts: [] };
+    return null;
+  }
   async function runSynthesis(entry) {
     const s = sessionState, c = conv(), answers = synthesisAnswers();
     let result = null;
     const started = Date.now();
     if (!answers.some(a => a.id.startsWith("question_"))) entry.note = "nothing";
-    else if (mockMode) result = { contradiction: { present: false }, interpretation: { offer: false }, closing: "That's all three. I'll carry your answers into what comes next." };
+    // The demonstration shows the review with a prepared question, labelled as such; it never claims a tension.
+    else if (mockMode) result = { contradiction: { present: false }, uncertainty: { present: true, about: "Your answers say what you would do, but not what you would be willing to give up for it.", question: "Which of these three choices would cost you the most, and why?" }, interpretation: { offer: false }, closing: "That's all three. I'll carry your answers into what comes next." };
     else if (capabilities?.openai === false) entry.note = "config";
     else {
       const response = await converse("synthesis", "/api/synthesis", { answers, avoid_claims: rejectedClaims() });
@@ -572,38 +605,90 @@
     if (s !== sessionState || c.synthesis !== entry || entry.status !== "thinking") return;
     entry.status = result ? "done" : "failed"; entry.result = result; entry.mode = mockMode ? "demo" : "live";
     if (!result && !entry.note) entry.note = "failed";
-    // A visible tension takes the place of a bold interpretation; never both.
-    if (result?.contradiction?.present) c.tension = { first: result.contradiction.first, second: result.contradiction.second, tension: result.contradiction.tension, choice: "", explanation: "", mode: entry.mode };
-    else if (result?.interpretation?.offer) c.speculations.synthesis = { claim: result.interpretation.claim, inferred: result.interpretation.inferred, unknown: result.interpretation.unknown, evidence: result.interpretation.evidence || [], reaction: "", explanation: "", mode: entry.mode };
+    c.review = reviewFrom(result, entry.mode);
+    // A tension replaces the bold reading (the server never returns both).
+    if (!c.review || c.review.kind !== "tension") {
+      if (result?.interpretation?.offer) c.speculations.synthesis = { claim: result.interpretation.claim, inferred: result.interpretation.inferred, unknown: result.interpretation.unknown, evidence: result.interpretation.evidence || [], reaction: "", explanation: "", mode: entry.mode };
+    }
     if (s.currentStage === 3 && s.questionIndex >= questions.length && c.s3 === "reading") c.s3 = phaseAfterSynthesis();
     render();
   }
+  // The participant's reply to the review: one brief acknowledgement of how the reading changed, or at
+  // most one clarification first. Silence or Skip is never read as agreement.
+  function mockReview(r) {
+    return { move: "acknowledge", text: r.misunderstood ? "Thank you. I'll set that comparison aside and keep your words instead." : "Thank you. In this demonstration I keep your explanation exactly as you wrote it.", resolution: r.misunderstood ? "premise_rejected" : "still_open", understanding: "" };
+  }
+  async function respondReview(isClarify = false) {
+    const s = sessionState, r = conv().review;
+    if (!r) return;
+    const ticket = ++r.ticket, waiting = isClarify ? "clarifyThinking" : "thinking";
+    r.status = waiting; r.note = ""; r.sent = true;
+    render();
+    const allowClarify = !isClarify && !r.clarification && !!r.response.text.trim();
+    const payload = {
+      kind: r.kind, comparison: r.comparison, question: r.question, excerpts: r.excerpts, answers: synthesisAnswers(),
+      response: r.response.text.trim(), misunderstood: r.misunderstood,
+      clarification_question: isClarify ? r.clarification.question : "", clarification_answer: isClarify ? r.clarification.text.trim() : "",
+      allow_clarify: allowClarify, avoid_claims: rejectedClaims()
+    };
+    const started = Date.now();
+    let result = null;
+    if (mockMode) result = { review: mockReview(r) };
+    else if (capabilities?.openai !== false) result = await converse("review", "/api/review", payload);
+    await pause(Math.max(0, 650 - (Date.now() - started)));
+    if (s !== sessionState || conv().review !== r || ticket !== r.ticket || r.status !== waiting) return;
+    const v = result?.review;
+    const valid = v && typeof v.text === "string" && v.text.trim() && (v.move === "acknowledge" || v.move === "clarify" && allowClarify);
+    if (result && !valid) invalidResult("review");
+    if (valid && v.move === "clarify") { r.clarification = { question: v.text, text: "", origin: "typed", declined: false }; r.status = "clarifying"; }
+    else {
+      r.ack = valid ? v.text : "";
+      r.resolution = valid ? v.resolution : r.misunderstood ? "premise_rejected" : "still_open";
+      r.understanding = valid ? v.understanding || "" : "";
+      r.note = valid ? "" : capabilities?.openai === false ? "config" : "failed";
+      r.status = "responded";
+    }
+    render();
+  }
+  const reviewFallback = r => r.misunderstood && !r.response.text.trim() ? "Thank you. I'll set that comparison aside." : "Thank you. I'll keep your explanation exactly as you wrote it.";
+  const RESOLUTION_NOTE = { context_dependent: "Kept as depending on the situation, as you explained it.", resolved: "Kept as resolved by your explanation.", premise_rejected: "Set aside as my misunderstanding.", still_open: "Kept as still open.", answered: "Kept as answered in your words." };
   const detourLink = () => row(act("detour", "See how I built this", "btn-tertiary"));
   const situationName = id => { const i = questions.findIndex((_, n) => id.startsWith(`question_${n + 1}`)); return i >= 0 ? `Situation ${i + 1}` : id.startsWith("story") || id === "image_story" ? "Your image story" : "Your answer"; };
+  function stageReviewScreen() {
+    const r = conv().review, meta = r.kind === "tension" ? "Something I want to check" : "Something I don't know yet";
+    const recap = r.response.text.trim() ? said(r.response.text, r.response.origin) : r.misunderstood ? `<blockquote class="said">${tag("you")}<p>You said I misunderstood.</p></blockquote>` : "";
+    const clarRecap = r.clarification?.text?.trim() ? `<p class="asked">${esc(r.clarification.question)}</p>${said(r.clarification.text, r.clarification.origin)}` : "";
+    if (r.status === "thinking" || r.status === "clarifyThinking") return screen("conversation", `${idLine(meta)}<div class="conversation">${recap}${clarRecap}</div>${head(`<span class="sr-only">I'm thinking about what you said.</span>`, { bare: true })}${thinking("Thinking about your explanation")}`);
+    if (r.status === "clarifying") {
+      const target = "extra:review-clarify", audio = recordingFor(target);
+      return screen("respond", `${idLine(meta)}<div class="conversation conversation--compact">${recap}</div>${head(r.clarification.question, { bare: true, promptKey: "review-clarify", context: "One more question, then we go on. Answering is optional." })}
+        ${workspace(voiceColumn(target, audio), wordsColumn({ id: "reviewClarifyText", text: r.clarification.text, origin: r.clarification.origin, audio, placeholder: "Your answer, if you want to give one…" }))}`);
+    }
+    if (r.status === "responded") {
+      const panel = r.note === "failed" ? technical("review", { did: "Kept your explanation exactly as you wrote it; it still updates the model of you." }) : r.note === "config" ? whatHappened("review", { where: "Responding to your explanation", what: "Service not set up. The AI server has no OpenAI key.", did: "Kept your explanation exactly as you wrote it.", help: "The researcher needs to add an OpenAI key to the server." }) : "";
+      return screen("conversation", `${idLine(meta)}<div class="conversation">${recap}${clarRecap}</div>${head(r.ack || reviewFallback(r), r.ack ? { bare: true, promptKey: "review-ack" } : { bare: true })}
+        ${r.mode === "demo" ? `<p>${tag("demo")}</p>` : ""}${r.resolution && RESOLUTION_NOTE[r.resolution] ? `<p class="revision-note">${RESOLUTION_NOTE[r.resolution]}</p>` : ""}${panel}${detourLink()}`);
+    }
+    const target = "extra:review", audio = recordingFor(target);
+    const said2 = (r.excerpts || []).filter(e => e?.quote).map(e => { const a = answerById(e.source_id); return `<li>${tag("you", situationName(e.source_id).toUpperCase())}<p class="evidence-quote">“${esc(unquote(e.quote))}”</p>${a ? `<p class="source-note">Your full answer: ${esc(a.answer)}</p>` : ""}</li>`; }).join("");
+    return screen("respond", `${idLine(meta)}
+      <div class="review-comparison">${r.mode === "demo" ? `<p>${tag("demo", "PREPARED DEMONSTRATION QUESTION")}</p>` : ""}<p class="review-comparison__text">${esc(r.kind === "uncertainty" && /^[a-z]/.test(r.comparison) ? `I don't know yet ${r.comparison.replace(/[.s]+$/, "")}.` : r.comparison)}</p></div>
+      ${head(r.question, { bare: true, promptKey: "review-question" })}
+      ${said2 ? `<details class="evidence" data-keep="review-said"><summary>Show what I said</summary><div class="evidence-body"><ul class="evidence-list">${said2}</ul></div></details>` : ""}
+      <div class="row"><button type="button" class="choice" data-v6="review-misunderstood" aria-pressed="${r.misunderstood}">You misunderstood</button></div>
+      ${workspace(voiceColumn(target, audio), wordsColumn({ id: "reviewText", text: r.response.text, origin: r.response.origin, audio, placeholder: r.misunderstood ? "What did I get wrong? (optional)" : "In your own words, if you want to answer…" }))}`);
+  }
   function synthesisPhase() {
     const s = sessionState, c = conv(), entry = c.synthesis;
     if (c.s3 === "reading") return screen("conversation", `${head("Let me read your three answers together.", { meta: "Your answers" })}${progress("Reading your answers together", entry?.startedAt || Date.now())}
       <ul class="held-input">${synthesisAnswers().filter(a => /^question_\d$/.test(a.id)).map(a => `<li>${tag("you", situationName(a.id).toUpperCase())}<p>${esc(clip(a.answer, 160))}</p></li>`).join("")}</ul>`);
-    if (c.s3 === "tension" && c.tension) {
-      const t = c.tension, full = [t.first, t.second].map(e => answerById(e.source_id)).filter(Boolean);
-      return screen("conversation", `${head("Two of your answers seem to pull in different directions.", { meta: "Something I noticed" })}
-        <div class="tension-pair">${[t.first, t.second].map(e => `<blockquote class="said">${tag("you", situationName(e.source_id).toUpperCase())}<p>“${esc(unquote(e.quote))}”</p></blockquote>`).join('<span class="tension-pair__mark" aria-hidden="true">⟂</span>')}</div>
-        <div class="speculation side side--model">${tag("model", "TENTATIVE")}${t.mode === "demo" ? tag("demo") : ""}<p class="claim">${esc(t.tension)}</p></div>
-        <details class="evidence" data-keep="tension-full"><summary>Show the full answers</summary><div class="evidence-body"><ul class="evidence-list">${full.map(a => `<li>${tag("you")}<p class="evidence-quote">${esc(a.answer)}</p><p class="source-note">${esc(situationName(a.id))}</p></li>`).join("")}</ul></div></details>`);
-    }
-    if (c.s3 === "tension-ask" && c.tension) {
-      const t = c.tension, choices = tensionChoices.map(([value, label]) => `<button type="button" class="choice" data-v6="tension-choice" data-value="${value}" aria-pressed="${t.choice === value}">${label}</button>`).join("");
-      return screen("conversation", `${head("What makes these situations different for you?", { meta: "Your view", promptKey: "tension-ask" })}
-        <div class="choices choices--large" role="group" aria-label="What makes these situations different for you?">${choices}</div>
-        ${t.choice && t.choice !== "skip" ? `<div class="inline-field"><label for="tensionExplanation">Say more, if you want (optional)</label><textarea id="tensionExplanation" maxlength="800" rows="3">${esc(t.explanation || "")}</textarea></div>` : '<p class="hint">You don\'t have to explain. Different answers to different situations are not a mistake.</p>'}
-        ${detourLink()}`);
-    }
-    if (c.s3 === "speculation" && c.speculations.synthesis) return screen("conversation", `${head("Reading your answers together, here is what I wonder.", { meta: "Across your answers" })}${speculationCard("synthesis", c.speculations.synthesis)}${detourLink()}`);
+    if (c.s3 === "review" && c.review) return stageReviewScreen();
+    if (c.s3 === "speculation" && c.speculations.synthesis) return screen("conversation", `${head("Reading your answers together, here is what I wonder.", { meta: "Across your answers" })}${speculationCard("synthesis", c.speculations.synthesis)}${c.review ? "" : detourLink()}`);
     const closing = entry?.result?.closing || "That's all three. I'll carry your answers into what comes next.";
     const panel = entry?.note === "failed" ? technical("synthesis") : entry?.note === "config" ? whatHappened("synthesis", { where: WHERE.synthesis[0], what: "Service not set up. The AI server has no OpenAI key.", did: WHERE.synthesis[1], help: "The researcher needs to add an OpenAI key to the server." })
-      : entry?.note === "nothing" ? whatHappened("synthesis", { insufficient: true, where: WHERE.synthesis[0], what: "Not enough information. None of the three situations was answered, so there was nothing to read together.", did: "Moved on without an interpretation.", help: "You can go back and answer a situation if you want." })
-        : entry?.status === "skipped" ? "" : "";
-    return screen("conversation", `${head(closing, { meta: "Your answers", promptKey: "closing" })}${entry?.mode === "demo" ? `<p>${tag("demo")}</p>` : ""}${entry?.status === "skipped" ? calm("You moved on before I finished reading.") : ""}${panel}${detourLink()}`);
+      : entry?.note === "nothing" ? whatHappened("synthesis", { insufficient: true, where: WHERE.synthesis[0], what: "Not enough information. None of the three situations was answered, so there was nothing to read together.", did: "Moved on without an interpretation.", help: "You can go back and answer a situation if you want." }) : "";
+    const skipped = c.review?.status === "skipped" ? calm("You skipped the question. It stays open, and skipping is not taken as agreement.") : "";
+    return screen("conversation", `${head(closing, { meta: "Your answers", promptKey: "closing" })}${entry?.mode === "demo" ? `<p>${tag("demo")}</p>` : ""}${entry?.status === "skipped" ? calm("You moved on before I finished reading.") : ""}${skipped}${panel}${detourLink()}`);
   }
 
   /* ---------- the optional detour: how the model of you was built ---------- */
@@ -710,7 +795,7 @@
       const work = (async () => {
         const prediction = mockMode
           ? { ...mockPrediction(answers), target_question: predictionTarget, predicted_response: answers.some(a => a.id.startsWith("question_")) ? "Go to the interview. I'll be fine finishing on my own, but could you look over my slides tonight if you get a chance?" : null }
-          : (await callApi("/api/predict", { answers, profile: sessionState.inferred.profile, target_question: predictionTarget }, "json", inner.signal)).prediction;
+          : (await callApi("/api/predict", { answers, profile: profileForUse(), target_question: predictionTarget }, "json", inner.signal)).prediction;
         if (!prediction || prediction.target_question !== predictionTarget) throw new OperationFailure("invalid_response", "The prediction response was invalid.");
         if (ui().s4Pred !== p || p?.status !== "preparing") throw new OperationFailure("cancelled", "No longer needed.");
         sessionState.predicted.predictions = [prediction];
@@ -910,7 +995,7 @@
     if (actual?.trim()) answers.push({ id: "actual_prediction_answer", question: predictionTarget, answer: actual });
     const proxy = sessionState.generated.proxyResponses[0];
     if (proxy?.feedback === "corrected" && proxy.correction?.trim()) answers.push({ id: "proxy_correction", question: `How I would actually reply to: "${proxyMessage}"`, answer: proxy.correction.trim() });
-    return { scenario: "overlooked-helper", answers: answers.slice(0, 20), context: { profile: sessionState.inferred.profile, profile_feedback: sessionState.inferred.participantFeedback, contradiction_feedback: sessionState.inferred.contradictionFeedback }, discussed_questions: [...questions, dilemma, proxyQuestion], seen_scenarios: [] };
+    return { scenario: "overlooked-helper", answers: answers.slice(0, 20), context: { profile: profileForUse(), profile_feedback: sessionState.inferred.participantFeedback, contradiction_feedback: sessionState.inferred.contradictionFeedback }, discussed_questions: [...questions, dilemma, proxyQuestion], seen_scenarios: [] };
   }
   function revision() { const value = simInput(); delete value.seen_scenarios; return JSON.stringify(value); }
   function maybeStartScene() {
@@ -1086,11 +1171,14 @@
   };
   function conversationData() {
     const c = conv(), rows = [], del = key => row(act("delete-conv", "Delete this item", "btn-tertiary danger", `data-key="${key}"`));
-    if (c.image?.status === "done") rows.push(`${source("inferred", "AI READING OF YOUR IMAGE")}<div class="data-item"><p>${esc(c.image.reading.observation)} ${esc(c.image.reading.interpretation)}</p>${del("image")}</div>`);
+    if (c.image?.status === "done") rows.push(`${source("inferred", "SPECULATIVE FIRST IMPRESSION OF YOUR IMAGE")}<div class="data-item"><p>${esc(c.image.reading.observation)} ${esc(c.image.reading.interpretation)}</p>${c.image.verdict ? `<p class="small">${esc({ revised: "Revised after your explanation.", partly_supported: "Partly supported by your explanation.", supported: "Your explanation fitted it.", not_addressed: "Your explanation did not bear on it." }[c.image.verdict] || "")}</p>` : ""}${del("image")}</div>`);
     if (sessionState.supplied.imageDescription?.trim()) rows.push(`${source("supplied", "YOUR DESCRIPTION OF AN IMAGE")}<div class="data-item"><p>${esc(sessionState.supplied.imageDescription)}</p>${del("description")}</div>`);
     for (const [key, m] of Object.entries(c.moments)) if (m.followUp) rows.push(`${source("inferred", "FOLLOW-UP QUESTION")}<div class="data-item"><strong>${esc(m.followUp.question)}</strong>${m.followUp.text?.trim() ? `${source("supplied", "YOUR ANSWER")}<p>${esc(m.followUp.text)}</p>` : '<p class="small">Not answered.</p>'}${del(`follow:${key}`)}</div>`);
     for (const [key, sp] of Object.entries(c.speculations)) rows.push(`${source("inferred", "SPECULATIVE INTERPRETATION")}<div class="data-item"><p>${esc(sp.claim)}</p>${sp.reaction ? `${source("supplied", "YOUR REACTION")}<p>${esc({ fits: "That fits", partly: "Partly, but you've stretched it", isnt: "That isn't me" }[sp.reaction])}${sp.explanation ? ` · ${esc(sp.explanation)}` : ""}</p>` : ""}${del(`speculation:${key}`)}</div>`);
-    if (c.tension) rows.push(`${source("inferred", "POSSIBLE TENSION")}<div class="data-item"><p>${esc(c.tension.tension)}</p>${c.tension.choice ? `${source("supplied", "YOUR VIEW")}<p>${esc(tensionChoices.find(([v]) => v === c.tension.choice)?.[1] || "Continued without explaining")}${c.tension.explanation ? ` · ${esc(c.tension.explanation)}` : ""}</p>` : ""}${del("tension")}</div>`);
+    const rv = c.review;
+    if (rv) rows.push(`${source("inferred", rv.kind === "tension" ? "POSSIBLE TENSION RAISED" : "OPEN QUESTION RAISED")}<div class="data-item"><p>${esc(rv.comparison)} ${esc(rv.question)}</p>
+      ${rv.sent ? `${source("supplied", "YOUR EXPLANATION")}<p>${rv.misunderstood ? "You misunderstood. " : ""}${esc(rv.response.text)}</p>${rv.clarification?.text ? `<p>${esc(rv.clarification.text)}</p>` : ""}` : `<p class="small">${rv.status === "skipped" ? "Skipped: kept as still open, not as agreement." : "Not answered yet."}</p>`}
+      ${rv.understanding ? `${source("inferred", "UPDATED UNDERSTANDING")}<p>${esc(rv.understanding)}</p>` : ""}${rv.resolution ? `<p class="small">${esc(RESOLUTION_NOTE[rv.resolution] || "")}</p>` : ""}${del("review")}</div>`);
     return rows.length ? `<section class="data-section"><h3>The conversation</h3>${rows.join("")}</section>` : "";
   }
   window.renderData = () => {
@@ -1108,7 +1196,7 @@
     else if (key === "description") sessionState.supplied.imageDescription = "";
     else if (key.startsWith("follow:")) { const k = key.slice(7), m = c.moments[k]; if (m) { setRecording(`extra:${k}-followup`, null); m.followUp = null; if (m.status === "following") m.status = "asking"; } }
     else if (key.startsWith("speculation:")) { const k = key.slice(12); delete c.speculations[k]; if (c.moments[k]?.reply?.move === "interpret") c.moments[k].reply = null; }
-    else if (key === "tension") { c.tension = null; if (["tension", "tension-ask"].includes(c.s3)) c.s3 = "closing"; }
+    else if (key === "review") { setRecording("extra:review", null); setRecording("extra:review-clarify", null); c.review = null; if (c.s3 === "review") c.s3 = "closing"; }
     renderData(); render();
   }
 
@@ -1127,9 +1215,13 @@
     travel(() => { s.questionIndex = questions.length; startReading(); });
   }
   function toStage4() {
-    // Not base.move: the model of you may still be building, and Stage 4 waits for it.
-    travel(() => { sessionState.currentStage = 4; ui().s4 ||= "situation"; render(); }, 1, markerFor(4));
+    // Not base.move: the model of you may still be building, and Stage 4 waits for it. Corrections and the
+    // review explanation change the answers, so the model is rebuilt from them before any prediction.
+    const s = sessionState;
+    if (!mockMode && capabilities?.openai !== false && !activeOperations.has("identity") && (s.inferred.profile ? profileStale() : readableAnswers().some(a => a.id.startsWith("question_")))) void generateProfile();
+    travel(() => { s.currentStage = 4; ui().s4 ||= "situation"; render(); }, 1, markerFor(4));
   }
+  function skipReview() { const r = conv().review; if (r) { r.ticket++; r.status = "skipped"; } toStage4(); }
   function forward() {
     const s = sessionState, u = ui(), c = u.conv, stage = s.currentStage;
     if (!s.started || s.ended || s.finished) return null;
@@ -1179,9 +1271,16 @@
         return { label: "Back to the conversation", enabled: true, run: () => travel(() => { c.detour = false; render(); }, -1) };
       }
       if (c.s3 === "reading") return { label: "Continue without waiting", enabled: true, run: () => { if (c.synthesis) c.synthesis.status = "skipped"; travel(() => { c.s3 = "closing"; render(); }); } };
-      if (c.s3 === "tension") return { label: "Continue", enabled: true, run: () => travel(() => { c.s3 = "tension-ask"; render(); }) };
-      if (c.s3 === "tension-ask") return { label: "Continue to Stage 4", enabled: !!c.tension?.choice, reason: "Choose one, or continue without explaining.", run: toStage4,
-        alt: c.tension?.choice ? null : { label: "Continue without explaining", run: () => { c.tension.choice = "skip"; toStage4(); } } };
+      if (c.s3 === "speculation" && c.review && c.review.status !== "skipped") return { label: "Continue", enabled: true, run: () => travel(() => { c.s3 = "review"; render(); }) };
+      if (c.s3 === "review" && c.review) {
+        const r = c.review, transcribing = activeOperations.has("transcription");
+        if (r.status === "asking") return { label: "Send", enabled: (!!r.response.text.trim() || r.misunderstood) && !recorder && !transcribing,
+          reason: recorder ? "Stop recording first." : transcribing ? "Turning your recording into words…" : "Answer in your own words, say I misunderstood, or skip.",
+          run: () => { room.react("answer"); travel(() => { void respondReview(false); }); } };
+        if (r.status === "thinking" || r.status === "clarifyThinking") return { label: "Continue without waiting", enabled: true, run: () => { r.ticket++; r.status = "responded"; r.note = "skipped"; toStage4(); } };
+        if (r.status === "clarifying") return { label: "Send", enabled: !!r.clarification.text.trim() && !recorder && !transcribing, reason: recorder ? "Stop recording first." : "Answer if you want to, or continue.",
+          run: () => { room.react("answer"); travel(() => { void respondReview(true); }); }, alt: { label: "Continue without answering", run: () => { r.clarification.declined = true; r.status = "responded"; r.resolution ||= "still_open"; toStage4(); } } };
+      }
       return { label: "Continue to Stage 4", enabled: true, run: toStage4 };
     }
     if (stage === 4) {
@@ -1237,7 +1336,7 @@
   function skipLabel() {
     const s = sessionState, stage = s.currentStage;
     if (atCheckpoint()) return "Skip Stage 5";
-    return ({ 1: "Continue without an image", 2: "Skip this step", 3: s.questionIndex < questions.length ? "Skip this situation" : "Skip to Stage 4", 4: "Skip this stage", 5: "Skip to Stage 6", 6: "Finish without this" })[stage] || "Skip";
+    return ({ 1: "Continue without an image", 2: "Skip this step", 3: s.questionIndex < questions.length ? "Skip this situation" : conv().s3 === "review" && conv().review?.status === "asking" ? "Skip this question" : "Skip to Stage 4", 4: "Skip this stage", 5: "Skip to Stage 6", 6: "Finish without this" })[stage] || "Skip";
   }
   // A second click on a selected choice takes it back; written explanations are kept as drafts.
   function undoChoice(button) {
@@ -1251,7 +1350,7 @@
       else s.generated.proxyResponses[0].feedback = "";
     } else if (v6 === "review-uncertainty") { const reply = replyFor(unknownsOf(s.inferred.profile)[Number(button.dataset.index)]); if (reply) reply.verdict = ""; }
     else if (v6 === "react") { const sp = u.conv.speculations[button.dataset.key]; if (sp) sp.reaction = ""; }
-    else if (v6 === "tension-choice") { if (u.conv.tension) u.conv.tension.choice = ""; }
+    else if (v6 === "review-misunderstood") { if (u.conv.review) u.conv.review.misunderstood = false; }
     else if (v6 === "mark-sentence") { const x = s.generated.proxyResponses[0]?.sentences?.[Number(button.dataset.index)]; if (x) x.mark = ""; }
     else if (v6 === "feedback-answer") { if (!["sending", "sent"].includes(u.feedback.state)) delete u.feedback.answers[button.dataset.q]; }
     else if (v6 === "wrong-part") s.feedback.wrongParts = (s.feedback.wrongParts || []).filter(p => p !== button.dataset.value);
@@ -1389,7 +1488,11 @@
           return travel(() => { s.currentStage = 2; render(); }, -1, markerFor(2));
         }
         if (c.detour) return travel(() => { if (s.ui.profilePage > 0) s.ui.profilePage--; else c.detour = false; render(); }, -1);
-        if (c.s3 === "tension-ask") return travel(() => { c.s3 = "tension"; render(); }, -1);
+        if (c.s3 === "review" && c.review) {
+          const r = c.review;
+          if (r.status === "clarifying" || r.status === "responded" || r.status === "thinking" || r.status === "clarifyThinking") { r.ticket++; return travel(() => { r.status = "asking"; render(); }, -1); }
+          if (c.speculations.synthesis) return travel(() => { c.s3 = "speculation"; render(); }, -1);
+        }
         if (c.s3 === "reading" && c.synthesis) c.synthesis.status = "skipped";
         return travel(() => { s.questionIndex = questions.length - 1; render(); }, -1);
       }
@@ -1409,7 +1512,7 @@
     if (direction === "skip") {
       if (stage === 2 && ["thinking", "followThinking"].includes(moment("story").status)) stopWaiting("story");
       if (stage === 3 && s.questionIndex < questions.length) { const key = `question_${s.questionIndex + 1}`; if (moment(key).status !== "asking") stopWaiting(key); return nextQuestion(); }
-      if (stage === 3) return toStage4();
+      if (stage === 3) return conv().s3 === "review" && conv().review && ["asking", "thinking", "clarifyThinking"].includes(conv().review.status) ? skipReview() : toStage4();
       if (stage === 4) { if (u.s4Pred?.status === "preparing") { u.s4Pred.status = "skipped"; u.s4Pred.cancel?.(); } return enterCheckpoint(); }
     }
     if (stage === 1 && direction !== "back" && c.image?.status === "reading") c.image.status = "skipped";
@@ -1428,7 +1531,7 @@
   function screenKey() {
     const s = sessionState, u = ui(), c = u.conv, key = s.currentStage === 2 ? "story" : `question_${s.questionIndex + 1}`;
     return [s.started, s.ended, s.finished, s.currentStage, s.questionIndex, s.ui.profilePage, s.predictionShown, u.checkpoint, u.messageSeen, u.consentPage, u.simulationStep, u.proxyView, u.s4, u.s4Pred?.status, u.describing,
-      c.image?.status, c.moments[key]?.status, c.s3, c.detour, !!s.generated.proxyResponses.length, !!s.generated.simulation, !!s.inferred.profile].join("|");
+      c.image?.status, c.moments[key]?.status, c.s3, c.review?.status, c.detour, !!s.generated.proxyResponses.length, !!s.generated.simulation, !!s.inferred.profile].join("|");
   }
   // Re-rendering replaces nodes; return keyboard focus to the equivalent control.
   function captureFocus() {
@@ -1587,7 +1690,8 @@
       if (m?.followUp) { m.followUp.text = event.target.value; m.followUp.origin = "typed"; }
     }
     if (id === "reactionExplanation") { const sp = c.speculations[event.target.dataset.key]; if (sp) sp.explanation = event.target.value; }
-    if (id === "tensionExplanation" && c.tension) c.tension.explanation = event.target.value;
+    if (id === "reviewText" && c.review) { c.review.response = { text: event.target.value, origin: "typed" }; }
+    if (id === "reviewClarifyText" && c.review?.clarification) { c.review.clarification.text = event.target.value; c.review.clarification.origin = "typed"; }
     if (id === "fbUnclear") u.feedback.comments.unclear_label = event.target.value;
     if (id === "fbComment") u.feedback.comments.comment = event.target.value;
     if (["fbUnclear", "fbComment"].includes(id)) { const send = stageElement.querySelector('[data-v6="send-feedback"]'); if (send && u.feedback.state !== "sending") send.disabled = !feedbackHasContent() || appConfig.serverless; }
@@ -1676,7 +1780,7 @@
       room.react(sp.reaction === "isnt" ? "reject" : "revise");
       focusAfterRender = "reactionExplanation"; render(); return;
     }
-    if (action === "tension-choice") { if (c.tension) { c.tension.choice = button.dataset.value; focusAfterRender = "tensionExplanation"; } render(); return; }
+    if (action === "review-misunderstood") { if (c.review) { c.review.misunderstood = true; focusAfterRender = "reviewText"; room.react("reject"); } render(); return; }
     if (action === "detour") { if (!s.inferred.profile && !activeOperations.has("identity") && readableAnswers().some(a => a.id.startsWith("question_"))) void generateProfile(); return travel(() => { c.detour = true; s.ui.profilePage = 0; render(); }); }
     if (action === "retry-prediction") { if (s.predicted.participantAnswers[0]?.text?.trim()) return; u.s4Pred = null; render(); return; }
     if (action === "standard-voice") {

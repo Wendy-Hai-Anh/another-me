@@ -14,6 +14,8 @@ Rules:
 - If sensitive information is explicitly supplied, include it only in supplied_information. Its answer ID must not appear in inferred_information, generated_assumptions, or contradictions. Do not expand or interpret it elsewhere.
 - Never write "I know you", "I understand you", or "this is who you are".
 - List important unknowns instead of filling gaps.
+- Some answers record the participant's feedback on the AI rather than a new situation. reaction_* answers are their reaction to an AI suggestion quoted in the question; the suggestion is not their statement and must never become supplied or inferred information on its own. correction_* answers are their own correction of an interpretation they rejected; never restate the rejected interpretation.
+- review_explanation (and review_clarification) is their reply to an apparent tension or open question the AI raised. If they explained a tension, do not list it as an unresolved contradiction: either leave it out or describe it as depending on the context they gave, with their explanation as possible_explanation. If they said the AI misunderstood, drop that tension entirely. If they answered an open question, remove it from unknowns. A tension the AI raised but they did not answer stays open; never treat silence as agreement.
 - profile_summary must call the result a temporary algorithmic profile and state that it does not represent the participant's complete or authentic identity.
 - Use concise, plain language.`;
 

@@ -40,7 +40,7 @@ test("Stage 6 always uses the overlooked-helper situation, and its demonstration
 });
 
 test("new conversation answer ids are never read aloud by the double", () => {
-  for (const id of ["question_1_followup", "story_followup", "reaction_story", "correction_synthesis", "tension_explanation"]) {
+  for (const id of ["question_1_followup", "story_followup", "reaction_story", "correction_synthesis", "tension_explanation", "review_explanation", "review_clarification"]) {
     assert.equal(proxyText.hasReferences(`As I said in ${id}, I would help.`), true, id);
   }
   assert.equal(proxyText.hasReferences("I can help for an hour on Saturday."), false);

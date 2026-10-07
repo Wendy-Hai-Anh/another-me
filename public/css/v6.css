@@ -714,3 +714,6 @@ body.is-passing .scrim{opacity:.18}
   .topbar-end{margin-left:auto;gap:6px}
   .session-menu summary{min-height:32px}
 }
+/* ---------- end of Stage 3: one review of a tension or open question ---------- */
+.review-comparison{display:flex;flex-direction:column;gap:8px;max-width:68ch;padding-left:16px;border-left:2px solid rgb(var(--inferred-rgb) / .55)}
+.review-comparison__text{font:400 clamp(1.02rem,.95rem + .35vw,1.18rem)/1.6 var(--serif);color:var(--fg)}
