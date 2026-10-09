@@ -12,6 +12,9 @@ const {
   validateSchema
 } = require("./schemas.cjs");
 const { PROFILE_CONSTRUCTION_PROMPT, PREDICTION_PROMPT } = require("./prompts.cjs");
+const { SPEAKERS, compose, demonstratedStyle, doubleStyleErrors } = require("./voices.cjs");
+// The prediction speaks as the participant, so it is composed with the double's voice only.
+const DOUBLE_PREDICTION_PROMPT = compose({ speaker: SPEAKERS.DOUBLE, task: PREDICTION_PROMPT });
 
 require("dotenv").config({
   path: path.resolve(__dirname, "..", ".env.local"),
@@ -239,11 +242,12 @@ async function createPrediction({ answers, profile, targetQuestion }) {
   }
 
   return createStructuredOutput({
-    instructions: PREDICTION_PROMPT,
+    instructions: DOUBLE_PREDICTION_PROMPT,
     input: {
       participant_answers: answers,
       identity_profile: profile,
       target_question: targetQuestion,
+      demonstrated_style: demonstratedStyle(answers),
       // Answers that sit on opposite sides of a recorded contradiction; a prediction may lean on one side only.
       do_not_cite_together: profile.contradictions.map((contradiction) => contradiction.evidence_ids)
     },
@@ -254,8 +258,9 @@ async function createPrediction({ answers, profile, targetQuestion }) {
       if (prediction.target_question !== targetQuestion) {
         errors.push("$.target_question must copy the requested target question exactly.");
       }
+      if (prediction.predicted_response) errors.push(...doubleStyleErrors(prediction.predicted_response, demonstratedStyle(answers)));
       // The interface introduces it with "I think you would tell them:", so it must be the words themselves.
-      if (/what would you say/i.test(targetQuestion) && /^\s*I(?:'d|’d| would)\s+(?:say|tell|reply|respond|answer)\b/i.test(prediction.predicted_response || "")) {
+      if (/what would you say/i.test(targetQuestion) && /^\s*I(?:'d|’d| would)\s+(?:(?:probably|just|maybe|honestly|likely)\s+)?(?:say|tell|reply|respond|answer)\b/i.test(prediction.predicted_response || "")) {
         errors.push("$.predicted_response must be the words spoken to the other person, not a description such as \"I'd tell them\". Write only the words themselves.");
       }
       return errors;

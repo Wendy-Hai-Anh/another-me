@@ -35,6 +35,8 @@
     reply: { label: "Response", stages: [2, 3], timeoutMs: 18000, loading: "Thinking about your answer…", success: "", fallback: "" },
     synthesis: { label: "Reading your answers together", stages: [3], timeoutMs: 35000, loading: "Reading your answers together…", success: "", fallback: "" },
     review: { label: "Your explanation", stages: [3], timeoutMs: 18000, loading: "Thinking about your explanation…", success: "", fallback: "" },
+    commentary: { label: "Another Me's reading", stages: [4, 6], timeoutMs: 18000, loading: "Reading your double's answer…", success: "", fallback: "" },
+    inference: { label: "Another Me's reading", stages: [6], timeoutMs: 40000, loading: "Putting the reading together…", success: "", fallback: "" },
     feedback: { label: "Feedback", stages: [], timeoutMs: 15000, loading: "Sending your feedback…", success: "", fallback: "" }
   });
   operationDefinitions.fiction = { label: "Fictional scene", stages: [6], timeoutMs: 90000, loading: "Writing a fictional scene…", success: "Your fictional scene is ready.", fallback: "" };
@@ -61,10 +63,14 @@
     question_2: "What matters most to you in deciding how to respond?",
     question_3: "What would make you reconsider?"
   };
-  const predictionTarget = `${dilemma} What would you say to them?`;
+  const predictionTarget = dilemma;
   const proxyContext = "Someone close to you has volunteered you to help with an event this weekend without asking. You had deliberately kept that time free for yourself.";
   const proxyMessage = "I told them you'd help. You're always the reliable one.";
-  const s6Intro = "I have your words and some of your choices. Here is a situation you never gave me—and the version of you I made for it.";
+  // The fixed last line of the portrait before Stage 6, appended in code rather than generated.
+  const S6_FINAL_LINE = "I have your words and some of your choices. Here is a situation you never shared with me—and the version of you I made for it.";
+  // Who is speaking is explicit in the data, never guessed from wording.
+  const SPEAKER_LABEL = { system_interpreter: "ANOTHER ME", participant_double: "YOUR DOUBLE" };
+  const voiceLabel = speaker => `<p class="column-label voice-label voice-label--${speaker === "participant_double" ? "double" : "system"}">${SPEAKER_LABEL[speaker]}</p>`;
   const wrongParts = ["The action", "The thoughts", "The way I spoke", "The whole interpretation"];
   const FEEDBACK_QUESTIONS = [["distinguish_sources", "Could you tell what you supplied from what the AI created?"], ["uncertainty_clear", "Was the uncertainty language clear?"], ["gradually_personal", "Did the questions gradually feel more personal?"], ["in_control", "Did you feel in control of your information?"]];
 
@@ -418,7 +424,19 @@
       if (said) answers.push({ id: "review_explanation", question: `The AI ${rv.kind === "tension" ? "noticed" : "was unsure"}: "${rv.comparison}" It asked: ${rv.question}`, answer: said });
       if (rv.clarification?.text?.trim()) answers.push({ id: "review_clarification", question: rv.clarification.question, answer: rv.clarification.text.trim() });
     }
-    uncertaintyReplies().filter(r => r.verdict !== "private" && r.explanation?.trim()).slice(0, 3).forEach((r, i) => {
+    // Stage 4: their own answer to the family dilemma and their correction of the double (never the double's words).
+    const actual = s.predicted.participantAnswers[0]?.text?.trim(), comparison = s.predicted.comparisons[0];
+    if (actual) answers.push({ id: "stage4_answer", question: dilemma, answer: actual });
+    if (comparison?.rating || comparison?.explanation?.trim()) {
+      const said = [comparison.rating ? `The double got ${({ Both: "both my decision and my reason", "Decision only": "my decision but not my reason", "Reason only": "my reason but not my decision", Neither: "neither my decision nor my reason" })[comparison.rating]} right.` : "", comparison.explanation?.trim() || ""].filter(Boolean).join(" ");
+      answers.push({ id: "stage4_correction", question: "How the AI double's answer to the family dilemma compared with mine", answer: said });
+    }
+    // Stage 5: their correction of the double's reply, and lines they said they would never say.
+    const proxy = s.generated.proxyResponses[0];
+    if (proxy?.feedback === "corrected" && proxy.correction?.trim()) answers.push({ id: "stage5_correction", question: `How I would actually reply to: "${proxyMessage}"`, answer: proxy.correction.trim() });
+    const never = (proxy?.sentences || []).filter(x => x.mark === "never").map(x => x.text);
+    if (never.length) answers.push({ id: "stage5_never", question: "Lines from the AI double's reply that I would never say", answer: never.map(t => `"${t}"`).join(" ") });
+    uncertaintyReplies().filter(r => r.verdict !== "private" && r.explanation?.trim()).slice(0, 2).forEach((r, i) => {
       answers.push({ id: `uncertainty_${i + 1}`, question: `The model was unsure: ${r.text}`, answer: r.explanation.trim() });
     });
     return answers.slice(0, 19);
@@ -498,6 +516,83 @@
     }
     return screen("image", `<div class="split split--image"><div class="image-voice">${voice}</div><div class="image-col">${figure}</div></div>`);
   }
+  /* ---------- stage 1: a photo from the participant's own phone, through a one-time QR code ---------- */
+  // The server keeps the photo in memory until this screen collects it once; the screen long-polls for it.
+  let phoneTicket = 0, phoneAbort = null;
+  const phoneAvailable = () => !appConfig.serverless && capabilities?.phoneUpload !== false;
+  function stopPhone() {
+    const p = ui().phone;
+    phoneTicket++; phoneAbort?.abort(); phoneAbort = null;
+    if (p?.id && p.status === "waiting") fetch(apiUrl(`/api/handoff/${p.id}/cancel`), { method: "POST", headers: apiHeaders(), keepalive: true }).catch(() => {});
+  }
+  async function startPhone() {
+    stopPhone();
+    if (cameraStream) { stopCamera(); sessionState.consent.cameraPresence = false; }
+    const u = ui(), ticket = ++phoneTicket, session = sessionState;
+    u.phone = { status: "creating" }; render();
+    let data = null;
+    try {
+      const response = await fetch(apiUrl("/api/handoff"), { method: "POST", headers: apiHeaders(), cache: "no-store" });
+      data = await response.json().catch(() => null);
+      if (!response.ok) data = { error: data?.error || "" };
+    } catch { data = null; }
+    if (ticket !== phoneTicket || session !== sessionState) return;
+    const qrOk = data?.qr && Array.isArray(data.qr.rows) && data.qr.rows.length === data.qr.size && data.qr.rows.every(r => typeof r === "string" && r.length === data.qr.size && /^[01]+$/.test(r));
+    if (data?.available && qrOk && typeof data.id === "string") {
+      u.phone = { status: "waiting", id: data.id, url: String(data.phone_url || ""), qr: data.qr, expiresAt: Date.now() + Number(data.expires_in_ms || 600_000) };
+      render(); void pollPhone(ticket, session);
+    } else { u.phone = { status: data?.reason === "local_only" ? "local" : "failed", error: data?.error || "" }; render(); }
+  }
+  async function pollPhone(ticket, session) {
+    let failures = 0;
+    const live = () => ticket === phoneTicket && session === sessionState;
+    const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+    while (live()) {
+      const p = ui().phone;
+      if (!p || p.status !== "waiting") return;
+      if (Date.now() > p.expiresAt) { p.status = "expired"; render(); return; }
+      phoneAbort = new AbortController();
+      let response = null;
+      try { response = await fetch(apiUrl(`/api/handoff/${p.id}/wait`), { headers: apiHeaders(), signal: phoneAbort.signal, cache: "no-store" }); } catch { response = null; }
+      if (!live()) return;
+      if (response?.status === 204) { failures = 0; continue; }
+      if (response?.status === 200) {
+        const blob = await response.blob().catch(() => null);
+        if (!live()) return;
+        if (blob?.size && /^image\/jpeg/.test(blob.type)) return receivePhoto(blob);
+      }
+      if (response?.status === 410) { p.status = "expired"; render(); return; }
+      if (++failures >= 5) { p.status = "failed"; render(); return; }
+      await pause(2500);
+    }
+  }
+  function receivePhoto(blob) {
+    const s = sessionState;
+    revoke(s.supplied.image);
+    s.supplied.image = { blob, url: URL.createObjectURL(blob), origin: "phone" };
+    s.photoConfirmed = false; conv().image = null; ui().phone = null;
+    invalidateAnalysis(); room.react("confirm"); render();
+    status("Photo received from your phone. Confirm it before continuing.", "success");
+  }
+  // The phone code only lives while Stage 1 is waiting for it.
+  function maybePhone() {
+    const s = sessionState, u = ui();
+    if (u.phone && (s.currentStage !== 1 || !s.started || s.ended || s.supplied.image || u.describing || cameraStream || atCheckpoint())) { stopPhone(); u.phone = null; }
+  }
+  function qrSvg(qr) {
+    const quiet = 4, n = qr.size + quiet * 2;
+    const d = qr.rows.flatMap((r, y) => [...r].map((v, x) => v === "1" ? `M${x + quiet} ${y + quiet}h1v1h-1z` : "")).join("");
+    return `<svg viewBox="0 0 ${n} ${n}" role="img" aria-label="QR code that opens a page for sending a photo from your phone" shape-rendering="crispEdges"><rect width="${n}" height="${n}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
+  }
+  function phoneFrame(p) {
+    const others = act("phone-cancel", "Choose another way", "btn-tertiary");
+    if (p.status === "creating") return `<div class="phone-handoff">${thinking("Making a code for your phone")}${row(others)}</div>`;
+    if (p.status === "waiting") return `<div class="phone-handoff"><figure class="phone-qr">${qrSvg(p.qr)}<figcaption>Scan this with your phone's camera, choose a photo, and it will appear here.</figcaption></figure>
+      <p class="phone-wait" role="status">Waiting for your phone…</p><p class="hint">Or type this address on your phone: <span class="phone-url">${esc(p.url)}</span><br>The code works for 10 minutes and for one photo.</p>${row(act("phone-new", "New code", "btn-tertiary"), others)}</div>`;
+    const text = { expired: "That code has expired.", local: "Phone upload isn't available on this setup.", failed: p.error || "I couldn't connect to the phone code." }[p.status] || "";
+    const researcher = p.status === "local" ? `<details class="evidence" data-keep="phone-local"><summary>For the researcher</summary><div class="evidence-body"><p>The phone has to reach this server. Run it with <code>HOST=0.0.0.0</code> with the laptop and phone on the same Wi-Fi network, set <code>PHONE_BASE_URL</code>, or use the hosted version.</p></div></details>` : "";
+    return `<div class="phone-handoff"><p class="calm-note">${esc(text)} You can choose an image on this computer or use the camera instead.</p>${researcher}${row(p.status === "local" ? "" : act("phone-new", p.status === "expired" ? "New code" : "Try again", "btn-secondary"), others)}</div>`;
+  }
   window.renderImage = () => {
     const s = sessionState, u = ui(), image = s.supplied.image;
     if (image && s.photoConfirmed) return imageReadingScreen();
@@ -506,7 +601,8 @@
     let frame;
     if (image) frame = `<figure class="image-frame">${tag("you", "YOUR IMAGE")}<img src="${image.url}" alt="Your chosen image"><figcaption>Is this the one?</figcaption></figure>${row(baseAct("retake", "Replace image"), baseAct("delete-image", "Delete", "btn-tertiary danger"))}`;
     else if (cameraStream) frame = `<figure class="image-frame image-frame--live"><video id="cameraVideo" class="camera" autoplay muted playsinline aria-label="Mirrored live camera preview"></video><figcaption>Live and mirrored. Nothing is kept until you take the photo.</figcaption></figure>${row(baseAct("capture", "Take photo", "btn-primary"), baseAct("camera-off", "Turn camera off", "btn-tertiary"))}`;
-    else frame = `<div class="image-drop"><span class="image-drop__ring" aria-hidden="true"></span>${row(`<label class="btn-secondary file-button">Choose an image<input id="imageInput" type="file" accept="image/*"></label>`, baseAct("enable-camera", "Use camera"))}${row(act("describe-image", "Describe an image instead", "btn-tertiary"))}<p class="hint">The camera starts only if you choose it.</p></div>`;
+    else if (u.phone) frame = phoneFrame(u.phone);
+    else frame = `<div class="image-drop"><span class="image-drop__ring" aria-hidden="true"></span>${row(`<label class="btn-secondary file-button">Choose an image<input id="imageInput" type="file" accept="image/*"></label>`, baseAct("enable-camera", "Use camera"), phoneAvailable() ? act("phone-start", "Use a photo from your phone") : "")}${row(act("describe-image", "Describe an image instead", "btn-tertiary"))}<p class="hint">The camera starts only if you choose it.</p></div>`;
     return screen("image", `<div class="split split--image"><div>${head(imagePrompt, { promptKey: "image-prompt", context: `${imageContext} I'll describe what I can see in it, never faces or appearance.` })}
       <details class="evidence" data-keep="what-is-this"><summary>What is this experience?</summary><div class="evidence-body"><p>Over six stages, a system talks with you, turns what you share into an interpretation of you, then a prediction, then a double that speaks as you. Every step is an AI reading of limited information, not an objective version of you.</p></div></details></div>
       <div class="image-col">${frame}${deviceNotice("camera")}</div></div>`);
@@ -520,7 +616,7 @@
     const reactions = [["fits", "That fits"], ["partly", "Partly, but you've stretched it"], ["isnt", "That isn't me"]]
       .map(([value, label]) => `<button type="button" class="choice" data-v6="react" data-key="${key}" data-value="${value}" aria-pressed="${r === value}">${label}</button>`).join("");
     const note = { rejected: "Set aside. It won't shape anything that follows, and saying no doesn't prove anything either way.", context: "Kept with your reservation. Only what you say about it travels on.", confirmed: "Kept as something you recognise." }[state];
-    return `<section class="speculation side side--model ${state ? `is-${state}` : ""} ${acknowledge === `sp:${key}` ? "is-ack" : ""}">${lead ? `<p class="speculation__lead">${esc(lead)}</p>` : ""}
+    return `<section class="speculation side side--model ${state ? `is-${state}` : ""} ${acknowledge === `sp:${key}` ? "is-ack" : ""}">${voiceLabel("system_interpreter")}${lead ? `<p class="speculation__lead">${esc(lead)}</p>` : ""}
         ${tag("model", "SPECULATIVE AI INTERPRETATION")}${sp.mode === "demo" ? tag("demo") : ""}
         <p class="claim speculation__claim">${esc(sp.claim)}</p>${note ? `<p class="revision-note">${note}</p>` : ""}${why(key, sp)}</section>
       <section class="reaction" aria-label="Your reaction"><div class="choices" role="group" aria-label="Does this interpretation fit you?">${reactions}</div>
@@ -789,7 +885,7 @@
   }
   // The participant's own answer to this situation is never sent: the prediction always comes first.
   window.generatePrediction = async () => {
-    const answers = !mockMode && sessionState.inferred.profileAnswers ? sessionState.inferred.profileAnswers : readableAnswers();
+    const answers = (!mockMode && sessionState.inferred.profileAnswers ? sessionState.inferred.profileAnswers : readableAnswers()).filter(a => !/^stage[45]_/.test(a.id));
     const p = ui().s4Pred;
     let cancel = () => {};
     if (p) p.cancel = () => cancel();
@@ -799,7 +895,7 @@
       const stopped = new Promise((_, reject) => { cancel = () => { inner.abort(); reject(new OperationFailure("cancelled", "Stopped by the participant.")); }; });
       const work = (async () => {
         const prediction = mockMode
-          ? { ...mockPrediction(answers), target_question: predictionTarget, predicted_response: answers.some(a => a.id.startsWith("question_")) ? "Go to the interview. I'll be fine finishing on my own, but could you look over my slides tonight if you get a chance?" : null }
+          ? { ...mockPrediction(answers), target_question: predictionTarget, predicted_response: answers.some(a => a.id.startsWith("question_")) ? "I can lend some of it, not most of it, and only if we write down when it comes back. I'm still signing the lease next week. If you keep pushing tonight, I'm going to stop the conversation and pick it up tomorrow." : null }
           : (await callApi("/api/predict", { answers, profile: profileForUse(), target_question: predictionTarget }, "json", inner.signal)).prediction;
         if (!prediction || prediction.target_question !== predictionTarget) throw new OperationFailure("invalid_response", "The prediction response was invalid.");
         if (ui().s4Pred !== p || p?.status !== "preparing") throw new OperationFailure("cancelled", "No longer needed.");
@@ -821,11 +917,35 @@
     const extra = `<div class="why__part">${tag("model", "THE CONNECTION I MADE")}<p>${esc(prediction.uncertainty_statement || "")}</p></div>${against.length ? `<div class="why__part">${tag("conflict", "WHAT POINTS THE OTHER WAY")}<ul class="evidence-list">${against.map(a => `<li><p class="evidence-quote">${esc(a.answer)}</p><p class="source-note">in reply to: ${esc(clip(a.question, 140))}</p></li>`).join("")}</ul></div>` : ""}${prediction.alternative_possible_response ? `<div class="why__part">${tag("uncertain", "ANOTHER POSSIBILITY")}<p>${esc(unquote(prediction.alternative_possible_response))}</p></div>` : ""}`;
     return evidence(prediction.evidence_ids, extra, "Why this interpretation?", "why-prediction");
   }
+  // Another Me's short reading around a double's answer: a separate system request, shown as a separate block.
+  // It is optional; if it fails or is unavailable, nothing is shown in its place.
+  function commentaryFor(key, situation, doubleText) {
+    const u = ui(), c = (u.comments ||= {}), existing = c[key];
+    if (!doubleText || mockMode || capabilities?.openai === false) return existing;
+    if (existing && existing.forText === doubleText) return existing;
+    const entry = c[key] = { status: "loading", forText: doubleText, text: "" }, session = sessionState;
+    queueMicrotask(async () => {
+      const answers = readableAnswers().filter(a => key === "stage4" ? !/^stage[45]_/.test(a.id) : true);
+      const result = answers.length ? await converse("commentary", "/api/commentary", { situation, double_text: doubleText, answers, avoid_claims: rejectedClaims() }) : null;
+      if (session !== sessionState || (ui().comments || {})[key] !== entry) return;
+      const text = result?.speaker === "system_interpreter" && typeof result?.commentary?.text === "string" ? result.commentary.text.trim() : "";
+      entry.status = text ? "ready" : "none"; entry.text = text;
+      render();
+    });
+    return entry;
+  }
+  function commentaryBlock(entry) {
+    if (!entry || entry.status === "none") return "";
+    return `<section class="voice-block voice-block--system" aria-label="Another Me">${voiceLabel("system_interpreter")}${entry.status === "loading" ? thinking("Another Me is reading your double's answer") : `<p class="claim">${esc(entry.text)}</p>`}</section>`;
+  }
   function situationScreen() {
     const s = sessionState, p = ui().s4Pred, prediction = s.predicted.predictions[0], answered = !!s.predicted.participantAnswers[0]?.text?.trim();
     let model;
     if (!p || p.status === "preparing") model = progress("Preparing a prediction", p?.startedAt || Date.now());
-    else if (p.status === "ready" && prediction?.predicted_response) model = `<div class="prediction side side--model">${tag("predicted", "AI PREDICTION")}${s.predicted.mode === "mock" ? tag("demo") : ""}<p class="claim claim--predicted">I think you would tell them: <q>${esc(unquote(prediction.predicted_response))}</q></p><p class="confidence">${esc(prediction.confidence_label)} confidence · a label, not a measurement</p>${predictionWhy(prediction)}</div>`;
+    else if (p.status === "ready" && prediction?.predicted_response) {
+      const comment = commentaryFor("stage4", dilemma, prediction.predicted_response);
+      model = `<section class="prediction voice-block voice-block--double" aria-label="Your double">${voiceLabel("participant_double")}<div class="tag-row">${tag("predicted", "AI PREDICTION · NOT SOMETHING YOU SAID")}${s.predicted.mode === "mock" ? tag("demo") : ""}</div><p class="double-speech">${esc(unquote(prediction.predicted_response))}</p><p class="confidence">${esc(prediction.confidence_label)} confidence · a label, not a measurement</p>${predictionWhy(prediction)}</section>${commentaryBlock(comment)}`;
+    }
     else if (p.status === "skipped") model = calm("You chose to answer without waiting, so there is no prediction for this situation.");
     else if (p.status === "insufficient") model = `${calm("I don't have enough from your answers to predict this one, so I'll just ask you.")}${whatHappened("prediction", { insufficient: true, where: WHERE.prediction[0], what: `Not enough information. ${prediction?.uncertainty_statement || "Your answers don't say enough about situations like this one."}`, did: "Asked you directly instead of guessing.", help: "Nothing is needed from you. This is not a technical problem." })}`;
     else {
@@ -834,19 +954,19 @@
         : p.reason === "profile" ? technical("identity", { did: "Kept your answers; without a model of you there was nothing to predict from.", actions: retry }) : technical("prediction", { actions: retry });
       model = `${calm("I couldn't prepare a prediction this time, so I'll just ask you.")}${panel}`;
     }
-    return screen("predict", `${head(dilemma, { promptKey: "prediction-dilemma", meta: "A new situation" })}${model}`);
+    return screen("predict", `${head("Your family wants your savings, tonight.", { promptKey: "prediction-dilemma", meta: "A hypothetical situation" })}<p class="scenario">${esc(dilemma)}</p><p class="hint">Your double answers first. Then you.</p>${model}`);
   }
   window.renderPrediction = () => {
     const s = sessionState, u = ui(), prediction = s.predicted.predictions[0], actual = s.predicted.participantAnswers[0], comparison = s.predicted.comparisons[0];
     const ready = u.s4Pred?.status === "ready" && prediction?.predicted_response;
     if (u.s4 === "situation") return situationScreen();
-    if (u.s4 === "answer") return screen("predict", `${head("What would you actually say?", { promptKey: "prediction-answer", meta: "Your answer" })}
-      ${ready ? `<p class="recap-line">${tag("predicted", "I PREDICTED")}<span>${esc(unquote(prediction.predicted_response))}</span></p>` : ""}
+    if (u.s4 === "answer") return screen("predict", `${head("Your turn. Be specific: what would you actually say to them, and what would you do?", { promptKey: "prediction-answer", meta: "Your answer" })}
+      ${ready ? `<p class="recap-line">${tag("predicted", "YOUR DOUBLE SAID")}<span>${esc(clip(unquote(prediction.predicted_response), 200))}</span></p>` : ""}
       <details class="evidence quiet" data-keep="s4-situation"><summary>The situation</summary><div class="evidence-body"><p>${esc(dilemma)}</p></div></details>
-      ${workspace(voiceColumn("prediction-answer", actual?.audio), wordsColumn({ id: "actualAnswer", text: actual?.text, origin: actual?.textOrigin, audio: actual?.audio, placeholder: "What would you say to them?" }))}`);
+      ${workspace(voiceColumn("prediction-answer", actual?.audio), wordsColumn({ id: "actualAnswer", text: actual?.text, origin: actual?.textOrigin, audio: actual?.audio, placeholder: "What would you say to your parents and sibling?" }))}`);
     const choices = ["Both", "Decision only", "Reason only", "Neither"].map(v => `<button type="button" class="choice" data-action="rate-prediction" data-value="${v}" aria-pressed="${comparison?.rating === v}">${v}</button>`).join("");
     return screen("predict", `${head("Did I get your decision right, your reason right, both, or neither?", { meta: "Prediction and reality", promptKey: "prediction-compare" })}
-      <div class="split split--compare"><section class="side side--model">${columnLabel("I PREDICTED")}${s.predicted.mode === "mock" ? tag("demo") : ""}<p class="claim">${esc(unquote(prediction?.predicted_response || ""))}</p></section>
+      <div class="split split--compare"><section class="side side--model">${columnLabel("YOUR DOUBLE SAID")}${s.predicted.mode === "mock" ? tag("demo") : ""}<p class="claim">${esc(unquote(prediction?.predicted_response || ""))}</p></section>
       <section class="side side--you">${columnLabel("YOU SAID")}${tag(actual?.textOrigin === "transcribed" ? "heard" : "you")}<p class="you-claim">${esc(actual?.text || "")}</p></section></div>
       <div class="verdict"><div class="choices" role="group" aria-label="What did the prediction get right">${choices}</div><div class="inline-field"><label for="predictionCorrection">What did I miss? (optional)</label><textarea id="predictionCorrection" placeholder="In your own words…">${esc(comparison?.explanation || "")}</textarea></div><p class="hint">A different answer isn't a contradiction. People answer new situations differently.</p></div>`);
   };
@@ -964,7 +1084,7 @@
     }).join("");
     const choices = [["review-proxy", "Accept it", "accepted"], ["correct-proxy", "Correct it", "corrected"], ["reject-proxy", "Reject it", "rejected"]].map(([action, caption, value]) => `<button type="button" class="choice" data-action="${action}" aria-pressed="${editing ? value === "corrected" : item.feedback === value}">${caption}</button>`).join("");
     return screen("review", `${head("Which part could have come from you—and which part would you never say?", { meta: "Your judgement", promptKey: "proxy-review" })}
-      <div class="review-wrap ${state ? `is-${state}` : ""} ${acknowledge === "proxy" ? "is-ack" : ""}">${tag("double", "GENERATED ON YOUR BEHALF · AI DOUBLE")}${s.generated.proxyMode === "mock" ? tag("demo") : ""}
+      <div class="review-wrap ${state ? `is-${state}` : ""} ${acknowledge === "proxy" ? "is-ack" : ""}">${voiceLabel("participant_double")}${tag("double", "GENERATED ON YOUR BEHALF · AI DOUBLE")}${s.generated.proxyMode === "mock" ? tag("demo") : ""}
         <ol class="sentence-list">${sentences}</ol></div>
       <section class="overall"><p class="column-label">OVERALL · NO EXPLANATION NEEDED</p><div class="choices" role="group" aria-label="Your judgement of the whole reply">${choices}</div>
         ${editing ? `<div class="inline-field"><label for="proxyCorrection">What would you actually reply?</label><textarea id="proxyCorrection">${esc(item.correction || "")}</textarea>${row(baseAct("save-proxy-correction", "Keep my correction", "btn-secondary"), baseAct("cancel-proxy-correction", "Cancel", "btn-tertiary"))}</div>`
@@ -979,7 +1099,7 @@
     if (item && u.proxyView === "review") return reviewScreen(item);
     const loading = loadingMedia(), note = doubleNote(), media = s.generated.proxyMedia;
     const standard = item && !media.audio && !loading && "speechSynthesis" in window ? `${act("standard-voice", "Play in a standard voice (not yours)", "btn-tertiary")}<p class="hint">A standard computer voice from your browser, not a clone of yours.</p>` : "";
-    const reply = item ? `<div class="double-reply">${tag("double", "GENERATED ON YOUR BEHALF · AI DOUBLE")}${s.generated.proxyMode === "mock" ? tag("demo") : ""}<p class="double-speech">${esc(ProxyText.clean(item.text))}</p><p class="hint">An AI interpretation of you, not your real reply.</p>${evidence(item.evidence_ids, `<p>${esc(item.confidence_label)} confidence. This interpretation may be wrong.</p>`, "What did it draw on?", "proxy-evidence")}</div>` : "";
+    const reply = item ? `<div class="double-reply">${voiceLabel("participant_double")}${tag("double", "GENERATED ON YOUR BEHALF · AI DOUBLE")}${s.generated.proxyMode === "mock" ? tag("demo") : ""}<p class="double-speech">${esc(ProxyText.clean(item.text))}</p><p class="hint">An AI interpretation of you, not your real reply.</p>${evidence(item.evidence_ids, `<p>${esc(item.confidence_label)} confidence. This interpretation may be wrong.</p>`, "What did it draw on?", "proxy-evidence")}</div>` : "";
     return screen("double", `${head(item ? "Your double has replied for you." : flow?.done ? "Your double has no reply this time." : "Your double is replying for you.", { meta: "Generated on your behalf" })}
       <div class="split split--double"><section class="double-stage" aria-label="Your digital double">${doubleMedia()}<p class="media-truth">${item ? mediaTruth() : "Not yet generated"}</p></section>
       <section class="double-script"><div class="message-card message-card--small"><p class="column-label">THEY MESSAGED YOU</p><p class="message-card__text">${esc(proxyMessage)}</p></div>
@@ -996,10 +1116,6 @@
   /* ---------- stage 6: a situation you never gave, and a version of you for it ---------- */
   function simInput() {
     const answers = readableAnswers();
-    const actual = sessionState.predicted.participantAnswers[0]?.text;
-    if (actual?.trim()) answers.push({ id: "actual_prediction_answer", question: predictionTarget, answer: actual });
-    const proxy = sessionState.generated.proxyResponses[0];
-    if (proxy?.feedback === "corrected" && proxy.correction?.trim()) answers.push({ id: "proxy_correction", question: `How I would actually reply to: "${proxyMessage}"`, answer: proxy.correction.trim() });
     return { scenario: "overlooked-helper", answers: answers.slice(0, 20), context: { profile: profileForUse(), rejected_interpretations: rejectedClaims(), profile_feedback: sessionState.inferred.participantFeedback, contradiction_feedback: sessionState.inferred.contradictionFeedback }, discussed_questions: [...questions, dilemma, proxyQuestion], seen_scenarios: [] };
   }
   function revision() { const value = simInput(); delete value.seen_scenarios; return JSON.stringify(value); }
@@ -1022,11 +1138,11 @@
     return `${basis}<ul class="evidence-list">${rows}${conflicts}</ul><p>${tag("uncertain")} ${esc(item.confidence)} confidence. ${esc(item.uncertainty_statement)}</p><p>${tag("generated", "ANOTHER POSSIBLE ACTION")} ${esc(item.alternative_action)}</p><p>${tag("uncertain", "UNKNOWN")} ${item.unknowns.map(esc).join(" ") || "The actual outcome is unknown."}</p>`;
   }
   // Presentation only: the saved structured result becomes one scene, in the order a moment unfolds.
-  const SCENE_PARTS = [["thought", "predicted_thought", "Your first reaction"], ["decision", "predicted_decision", "The decision"], ["words", "predicted_dialogue", "What you say"], ["action", "predicted_action", "What you do"], ["consequence", "predicted_consequence", "What follows"]];
+  const SCENE_PARTS = [["thought", "predicted_thought", "First reaction"], ["decision", "predicted_decision", "The decision"], ["words", "predicted_dialogue", "What the double says"], ["action", "predicted_action", "What the double does"], ["consequence", "predicted_consequence", "What follows"]];
   const sceneText = (item, field) => field === "predicted_dialogue" ? (item.predicted_dialogue ? `“${unquote(item.predicted_dialogue)}”` : "") : item[field] || "";
-  function narrative(item) {
+  function narrative(item, withContext = true) {
     const parts = SCENE_PARTS.map(([key, field]) => { const text = sceneText(item, field); return text ? `<p class="${key === "thought" ? "narrative__inner" : key === "words" ? "narrative__speech" : ""}">${esc(text)}</p>` : ""; }).join("");
-    return `<p class="narrative__context">${esc(item.scenario)}</p>${parts}<p class="narrative__uncertain">${esc(item.uncertainty_statement)}</p>`;
+    return `${withContext ? `<p class="narrative__context">${esc(item.scenario)}</p>` : ""}${parts}<p class="narrative__uncertain">${esc(item.uncertainty_statement)}</p>`;
   }
   // Optional and lightweight: which part felt like them, which was a leap, and whether the leap is in the
   // action, the motive or the wording. It stays with the scene; it never becomes a memory or evidence.
@@ -1055,18 +1171,90 @@
     return screen("final", `${head("Does this still feel like you?", { promptKey: "final-question", meta: "The last question" })}
       <p class="hint">${simLabel()} The scene before this was generated, not remembered.</p><div class="choices choices--large" role="group" aria-label="Does this still feel like you">${choices}</div>${wrong}`);
   }
+  /* ---------- before Stage 6: Another Me's portrait, revealed one sentence at a time ---------- */
+  // Generated once per participant-context revision, validated in full before any reveal, cached for revisits.
+  const HOLD_MS = 3000, FADE_MS = 600;
+  let interludeTicket = 0, revealTimer = 0;
+  const interludeInput = () => ({ answers: readableAnswers(), avoid_claims: rejectedClaims() });
+  const interludeRevision = () => JSON.stringify(interludeInput());
+  const onInterlude = () => { const s = sessionState; return s.started && !s.ended && !s.finished && s.currentStage === 6 && ui().simulationStep === "intro"; };
+  const reducedReveal = () => room.reduced || matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+  function clearReveal() { clearTimeout(revealTimer); revealTimer = 0; }
+  function maybeStartInterlude() {
+    if (!onInterlude()) { clearReveal(); return; }
+    const u = ui(), il = u.interlude, rev = interludeRevision();
+    if (il && il.revision === rev) { if (il.status === "revealing" && !revealTimer) scheduleReveal(il); return; }
+    clearReveal();
+    const entry = u.interlude = { status: "loading", revision: rev, lines: [], shown: 0, animated: 0, startedAt: Date.now(), ticket: ++interludeTicket, mode: "" };
+    queueMicrotask(() => void loadInterlude(entry));
+  }
+  async function loadInterlude(entry) {
+    const s = sessionState, input = interludeInput();
+    let result = null;
+    if (mockMode) result = { speaker: "system_interpreter", evidence_limited: true, demo: true, inferences: [{ id: "inference_1", claim: "In this demonstration I don't read your answers, so I won't pretend to know you.", role: "limit", evidenceRefs: [], evidenceStrength: "limited", status: "tentative" }] };
+    else if (capabilities?.openai !== false && input.answers.length) result = await converse("inference", "/api/inference", input);
+    if (s !== sessionState || ui().interlude !== entry || entry.ticket !== interludeTicket) return;
+    const list = Array.isArray(result?.inferences) ? result.inferences : [];
+    const valid = result?.speaker === "system_interpreter" && list.length >= 1 && list.length <= 5 && list.every(i => typeof i?.claim === "string" && i.claim.trim() && i.claim.length <= 220);
+    if (result && !valid) invalidResult("inference");
+    if (!valid) { entry.status = "failed"; entry.note = !input.answers.length ? "nothing" : capabilities?.openai === false ? "config" : "failed"; render(); return; }
+    // The final line is fixed in code; only the readings were generated.
+    entry.inferences = list.map(i => ({ ...i, status: "tentative" }));
+    entry.lines = [...list.map(i => i.claim.trim()), S6_FINAL_LINE];
+    entry.mode = result.demo ? "demo" : "live";
+    if (reducedReveal()) { entry.shown = entry.lines.length; entry.status = "complete"; }
+    else { entry.shown = 1; entry.status = "revealing"; status(entry.lines[0]); }
+    render();
+    if (entry.status === "revealing") scheduleReveal(entry);
+  }
+  function scheduleReveal(entry) {
+    clearReveal();
+    if (entry.status !== "revealing" || !onInterlude()) return;
+    // Each hold starts once the sentence has finished fading in.
+    revealTimer = setTimeout(() => {
+      revealTimer = 0;
+      if (ui().interlude !== entry || !onInterlude() || entry.status !== "revealing") return;
+      entry.shown = Math.min(entry.lines.length, entry.shown + 1);
+      if (entry.shown >= entry.lines.length) entry.status = "complete";
+      status(entry.lines[entry.shown - 1]);
+      render();
+      if (entry.status === "revealing") scheduleReveal(entry);
+    }, FADE_MS + HOLD_MS);
+  }
+  function showAll() {
+    const entry = ui().interlude;
+    if (!entry || !["revealing", "complete"].includes(entry.status)) return;
+    clearReveal(); entry.shown = entry.lines.length; entry.status = "complete"; entry.animated = entry.lines.length; render();
+  }
+  function interludeScreen() {
+    const u = ui(), il = u.interlude;
+    const label = `<div class="tag-row">${voiceLabel("system_interpreter")}${il?.mode === "demo" ? tag("demo") : ""}</div>`;
+    if (!il || il.status === "loading") return screen("interlude", `${idLine("Before the last situation")}${label}<h2 class="sr-only screen-title">Another Me is putting its reading together.</h2>${thinking("Another Me is putting its reading together")}`);
+    if (il.status === "failed") {
+      const panel = il.note === "config" ? whatHappened("inference", { where: "Putting the reading together", what: "Service not set up. The AI server has no OpenAI key.", did: "Showed no reading rather than a generic one.", help: "The researcher needs to add an OpenAI key to the server." })
+        : il.note === "nothing" ? whatHappened("inference", { insufficient: true, where: "Putting the reading together", what: "Not enough information. There were no answers to read.", did: "Showed no reading rather than a generic one.", help: "You can continue." }) : technical("inference", { did: "Showed no reading rather than a generic one." });
+      return screen("interlude", `${idLine("Before the last situation")}${label}<h2 class="screen-title">I couldn't put that reading together. You can retry or continue.</h2>${row(act("retry-interlude", "Retry", "btn-secondary"))}${panel}`);
+    }
+    // A readable stack; only the newest sentence fades in, and only once.
+    const items = il.lines.slice(0, il.shown).map((line, i) => {
+      const fresh = i >= il.animated && !reducedReveal(), final = i === il.lines.length - 1;
+      return `<li class="interlude__line ${final ? "interlude__line--final" : ""} ${fresh ? "is-fresh" : ""}">${esc(line)}</li>`;
+    }).join("");
+    il.animated = il.shown;
+    return screen("interlude", `${idLine("Before the last situation")}${label}<h2 class="sr-only screen-title">Another Me's reading of you</h2><ol class="interlude" aria-label="Another Me's reading of you">${items}</ol>
+      ${il.status === "revealing" ? row(act("show-all", "Show all", "btn-tertiary")) : ""}<p class="hint">${il.mode === "demo" ? "" : "A reading, not a verdict. None of it is kept as fact about you."}</p>`);
+  }
   window.renderFiction = () => {
     const s = sessionState, u = ui(), item = s.generated.simulation;
     if (u.simulationStep === "final") return finalScreen();
+    if (u.simulationStep === "intro") return interludeScreen();
     if (item && u.simulationRevision !== revision()) return screen("deep", `${head("This scene is out of date.", { context: "Your answers or reviews changed after it was written, so it no longer reflects what you told me." })}${simLabel()}${row(act("delete-simulation", "Write it again from my current answers", "btn-secondary"))}`);
-    if (!item || u.simulationStep === "intro") {
-      const writing = !item && (activeOperations.has("fiction") || !u.s6 || !u.s6.done);
-      const note = u.s6?.fallback ? `${calm("The live scene couldn't be written, so here is a prepared demonstration scene. It does not come from an AI reading of your answers.")}${technical("fiction")}` : "";
-      return screen("deep", `${head(s6Intro, { promptKey: "s6-intro", meta: "A situation you never described" })}<p>${simLabel()}</p>
-        ${writing ? progress("Writing a fictional scene", u.s6?.startedAt || Date.now()) : note}`);
-    }
+    if (!item) return screen("deep", `${head("Writing a situation you never shared.", { meta: "A situation you never described" })}<p>${simLabel()}</p>${progress("Writing a fictional scene", u.s6?.startedAt || Date.now())}`);
+    const fallback = u.s6?.fallback ? `${calm("The live scene couldn't be written, so here is a prepared demonstration scene. It does not come from an AI reading of your answers.")}${technical("fiction")}` : "";
+    const comment = u.simulationMode === "real" ? commentaryFor("stage6", item.scenario, SCENE_PARTS.map(([, field]) => sceneText(item, field)).filter(Boolean).join(" ")) : null;
     return screen("narrative", `<div class="narrative-wrap">${simLabel()}<p class="screen-id"><span class="screen-id__num">06</span>${esc(stages[5][0])}<span class="screen-id__meta">${esc(item.scenario_title)}</span></p>
-      <h2 class="narrative-title">One possible version of you.</h2><article class="narrative">${narrative(item)}</article>${simWarning()}
+      <h2 class="narrative-title">One possible version of you.</h2>${fallback}<p class="narrative__context">${esc(item.scenario)}</p>
+      <section class="voice-block voice-block--double" aria-label="Your double">${voiceLabel("participant_double")}<article class="narrative">${narrative(item, false)}</article></section>${commentaryBlock(comment)}${simWarning()}
       <details class="evidence" data-keep="scene-evidence"><summary>Why this interpretation?</summary><div class="evidence-body">${simEvidence(item)}</div></details>
       ${sceneReactions(item)}
       ${row(act("delete-simulation", "Delete this scene", "btn-tertiary danger"))}</div>`);
@@ -1196,7 +1384,8 @@
     return source(type) + `<div class="data-item"><strong>${esc(label)}</strong>${media}<p>${esc(value)}</p><button type="button" class="btn-tertiary danger" data-action="delete-item" data-key="${esc(key)}">Delete this item</button></div>`;
   };
   function conversationData() {
-    const c = conv(), rows = [], del = key => row(act("delete-conv", "Delete this item", "btn-tertiary danger", `data-key="${key}"`));
+    const il = ui().interlude, portrait = il?.inferences?.length ? `${source("inferred", "ANOTHER ME'S READING BEFORE STAGE 6 · TENTATIVE")}<div class="data-item"><ul>${il.inferences.map(i => `<li>${esc(i.claim)} <span class="small">(${esc(i.evidenceStrength)} evidence)</span></li>`).join("")}</ul></div>` : "";
+    const c = conv(), rows = portrait ? [portrait] : [], del = key => row(act("delete-conv", "Delete this item", "btn-tertiary danger", `data-key="${key}"`));
     if (c.image?.status === "done") rows.push(`${source("inferred", "SPECULATIVE FIRST IMPRESSION OF YOUR IMAGE")}<div class="data-item"><p>${esc(c.image.reading.observation)} ${esc(c.image.reading.interpretation)}</p>${c.image.verdict ? `<p class="small">${esc({ revised: "Revised after your explanation.", partly_supported: "Partly supported by your explanation.", supported: "Your explanation fitted it.", not_addressed: "Your explanation did not bear on it." }[c.image.verdict] || "")}</p>` : ""}${del("image")}</div>`);
     if (sessionState.supplied.imageDescription?.trim()) rows.push(`${source("supplied", "YOUR DESCRIPTION OF AN IMAGE")}<div class="data-item"><p>${esc(sessionState.supplied.imageDescription)}</p>${del("description")}</div>`);
     for (const [key, m] of Object.entries(c.moments)) if (m.followUp) rows.push(`${source("inferred", "FOLLOW-UP QUESTION")}<div class="data-item"><strong>${esc(m.followUp.question)}</strong>${m.followUp.text?.trim() ? `${source("supplied", "YOUR ANSWER")}<p>${esc(m.followUp.text)}</p>` : '<p class="small">Not answered.</p>'}${del(`follow:${key}`)}</div>`);
@@ -1267,7 +1456,7 @@
     }
     if (stage === 1) {
       if (u.describing) return { label: "Continue", enabled: !!s.supplied.imageDescription?.trim(), reason: "Describe the image in a few words, or skip this step.", run: () => move("continue") };
-      if (!s.supplied.image) return { label: "Continue", enabled: false, reason: cameraStream ? "Take the photo, or choose a file instead." : "Choose an image, describe one, or skip this step." };
+      if (!s.supplied.image) return { label: "Continue", enabled: false, reason: cameraStream ? "Take the photo, or choose a file instead." : u.phone?.status === "waiting" ? "Waiting for a photo from your phone…" : "Choose an image, describe one, or skip this step." };
       if (!s.photoConfirmed) return { label: "Use this image", enabled: true, run: () => { s.photoConfirmed = true; room.react("confirm"); travel(() => render()); } };
       if (c.image?.status === "reading") return { label: "Continue without waiting", enabled: true, run: () => { c.image.status = "skipped"; move("continue"); } };
       return { label: "Continue", enabled: true, run: () => move("continue") };
@@ -1339,9 +1528,14 @@
     }
     const item = s.generated.simulation;
     if (u.simulationStep === "final") return { label: "Finish", enabled: !!s.feedback.feelsLikeYou, reason: "Choose an answer first, or finish without this.", run: () => move("continue") };
+    if (u.simulationStep === "intro") {
+      const il = u.interlude, enter = () => travel(() => { clearReveal(); u.simulationStep = "scene"; room.react("reveal"); render(); });
+      if (!il || il.status === "loading") return { label: "Continue", enabled: false, reason: "" };
+      if (il.status === "revealing") return { label: "Continue", enabled: false, reason: "", alt: { label: "Show all", run: showAll } };
+      return { label: "Continue", enabled: true, run: enter };
+    }
     if (!item) return { label: "Writing…", enabled: false, reason: "" };
     if (u.simulationRevision !== revision()) return { label: "Write it again", enabled: !busy, run: () => { s.generated.simulation = null; u.s6 = null; render(); } };
-    if (u.simulationStep === "intro") return { label: "Show me", enabled: true, run: () => travel(() => { u.simulationStep = "scene"; room.react("reveal"); render(); }) };
     return { label: "Does this still feel like you?", enabled: true, run: () => travel(() => { u.simulationStep = "final"; render(); }) };
   }
   let currentForward = null;
@@ -1671,7 +1865,7 @@
     if (cameraStream) { const v = document.getElementById("cameraVideo"); if (v && v.srcObject !== cameraStream) { v.srcObject = cameraStream; v.play().catch(() => {}); } }
     acknowledge = "";
     // Each stage starts its own work as soon as it is on screen; nothing waits for a button press.
-    maybeReadImage(); maybePredict(); maybeStartDouble(); maybeStartScene();
+    maybePhone(); maybeReadImage(); maybePredict(); maybeStartDouble(); maybeStartScene(); maybeStartInterlude();
     syncForward();
     if (recorder) drawWave();
   };
@@ -1752,6 +1946,7 @@
       return;
     }
     if (["end", "delete-session"].includes(old)) {
+      clearReveal(); stopPhone(); u.phone = null;
       cancelTransition(); room.setRecordingStream(null);
       if (old === "delete-session") {
         event.stopImmediatePropagation(); base.deleteSession();
@@ -1788,6 +1983,8 @@
       else await enablePresenceCamera();
       return;
     }
+    if (action === "phone-start" || action === "phone-new") return void startPhone();
+    if (action === "phone-cancel") { stopPhone(); u.phone = null; return render(); }
     if (action === "describe-image") { if (cameraStream) { stopCamera(); s.consent.cameraPresence = false; } u.describing = true; focusAfterRender = "imageDescription"; return travel(() => render()); }
     if (action === "stop-describing") return travel(() => { u.describing = false; render(); }, -1);
     if (action === "permissions") { if (busy) cancelActiveOperations(); return travel(() => { u.checkpoint = true; u.messageSeen = true; u.consentPage = 0; render(); }, -1, { num: "05", title: "THRESHOLD" }); }
@@ -1848,6 +2045,8 @@
       sessionState.inferred.uncertaintyFeedback = uncertaintyReplies().filter((r, i) => i !== Number(button.dataset.index));
       renderData(); render(); return;
     }
+    if (action === "show-all") return showAll();
+    if (action === "retry-interlude") { u.interlude = null; render(); return; }
     if (action === "delete-simulation") {
       if (activeOperations.has("fiction")) cancelActiveOperations();
       s.generated.simulation = null; s.generated.simulationContext = null; u.simulationFeedback = {}; u.simulationStep = "intro"; s.ui.fictionAnswered = false;
@@ -1862,7 +2061,7 @@
   });
   let resizeTimer = 0;
   addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (!transitioning) render(); }, 150); });
-  addEventListener("pagehide", () => { cancelTransition(); room.dispose(); music.setActive(false); });
+  addEventListener("pagehide", () => { clearReveal(); stopPhone(); cancelTransition(); room.dispose(); music.setActive(false); });
   if (appConfig.serverless) capabilities = { openai: false, elevenlabs: false, did: false, accessCode: false, demo: true };
   else fetch(apiUrl("/api/capabilities"), { headers: apiHeaders() }).then(r => r.ok ? r.json() : null).then(value => { capabilities = value; render(); }).catch(() => {});
 

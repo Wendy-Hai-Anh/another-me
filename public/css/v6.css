@@ -257,7 +257,15 @@ audio{display:block;width:100%;max-width:440px;height:40px}
 .camera,.presence-dock video{transform:scaleX(-1)}
 .image-drop{position:relative;width:100%;min-height:clamp(220px,38vh,340px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;border:1px dashed rgb(var(--fg-rgb) / .25);border-radius:18px;background:rgb(var(--shade-rgb) / .55);overflow:hidden}
 .image-drop__ring{position:absolute;width:62%;aspect-ratio:1;border-radius:50%;border:1px solid rgb(var(--accent-rgb) / .12);pointer-events:none}
-.image-drop .row{justify-content:center;position:relative}
+.image-drop .row{justify-content:center;position:relative;flex-wrap:wrap}
+/* Phone handoff: the QR code stays black on white so every phone camera can read it. */
+.phone-handoff{width:100%;display:flex;flex-direction:column;align-items:center;gap:12px;padding:18px 16px;border:1px dashed rgb(var(--fg-rgb) / .25);border-radius:18px;background:rgb(var(--shade-rgb) / .55);text-align:center}
+.phone-handoff .row{justify-content:center;flex-wrap:wrap}
+.phone-qr{margin:0;display:flex;flex-direction:column;align-items:center;gap:10px}
+.phone-qr svg{width:clamp(170px,24vh,230px);height:auto;display:block;border-radius:10px;background:#fff}
+.phone-qr figcaption{max-width:32ch;font-size:15px;line-height:1.5;color:var(--fg)}
+.phone-wait{font-size:14px;color:rgb(var(--fg-rgb) / .8)}
+.phone-url{overflow-wrap:anywhere;font-family:ui-monospace,"Courier New",monospace;font-size:13px}
 
 /* ---------- profile ---------- */
 .profile-summary{font:400 clamp(1.05rem,.95rem + .4vw,1.22rem)/1.6 var(--serif);color:var(--fg);max-width:68ch;padding-left:16px;border-left:2px solid rgb(var(--inferred-rgb) / .5)}
@@ -725,3 +733,19 @@ body.is-passing .scrim{opacity:.18}
 .scene-reactions .sentence-list{margin-top:4px}
 .scene-note{width:100%;min-height:40px;padding:8px 12px;border-radius:10px;border:1px solid rgb(var(--fg-rgb) / .2);background:var(--field);color:var(--fg);font:15px/1.4 var(--sans)}
 .scene-note:focus{border-color:var(--accent)}
+
+/* ---------- two voices: Another Me (system) and Your double, kept visibly apart ---------- */
+.voice-label{margin-bottom:2px}
+.voice-label--system{color:var(--inferred)}
+.voice-label--double{color:var(--generated)}
+.voice-block{display:flex;flex-direction:column;gap:10px;max-width:760px;padding:16px 18px;border-radius:var(--radius)}
+.voice-block--double{border:1px solid rgb(var(--generated-rgb) / .4);background:rgb(var(--shade-rgb) / .6)}
+.voice-block--system{border-left:2px solid rgb(var(--inferred-rgb) / .6);border-radius:0 var(--radius) var(--radius) 0;background:rgb(var(--inferred-rgb) / .06)}
+.screen--predict .scenario{max-width:72ch;font-size:clamp(1.02rem,.95rem + .3vw,1.16rem);line-height:1.6}
+/* ---------- the portrait before Stage 6 ---------- */
+.screen--interlude{max-width:820px;gap:18px}
+.interlude{display:flex;flex-direction:column;gap:14px;counter-reset:none}
+.interlude__line{font:400 clamp(1.15rem,1rem + .6vw,1.5rem)/1.45 var(--serif);color:var(--fg);max-width:44ch}
+.interlude__line--final{margin-top:12px;padding-top:16px;border-top:1px solid rgb(var(--fg-rgb) / .15);color:var(--muted);font-size:clamp(1.02rem,.95rem + .35vw,1.2rem)}
+.interlude__line.is-fresh{animation:line-in .6s var(--ease) both}
+@keyframes line-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <meta name="referrer" content="no-referrer">
+  <title>Another Me · Send a photo</title>
+  <style>
+    :root { --bg: #F7F4E8; --ink: #35255A; --muted: #5d5277; --pink: #C0267A; --line: rgba(53, 37, 90, .18); --ok: #2f7d32; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--ink); }
+    body { font: 17px/1.5 "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif; min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+    main { width: 100%; max-width: 30rem; margin: 0 auto; padding: 28px 16px 40px; flex: 1; display: flex; flex-direction: column; gap: 18px; }
+    .brand { font: 600 12px/1 ui-monospace, "Courier New", monospace; letter-spacing: .22em; text-transform: uppercase; color: var(--muted); }
+    h1 { font: 400 1.75rem/1.2 Georgia, "Times New Roman", serif; margin: 0; }
+    p { margin: 0; }
+    .hint { color: var(--muted); font-size: .92rem; }
+    .actions { display: flex; flex-direction: column; gap: 10px; }
+    .btn { appearance: none; display: flex; align-items: center; justify-content: center; min-height: 52px; padding: 12px 20px; border-radius: 999px; border: 1.5px solid var(--ink); background: transparent; color: var(--ink); font: 600 1rem/1.2 inherit; font-family: inherit; text-align: center; cursor: pointer; }
+    .btn--primary { background: var(--pink); border-color: var(--pink); color: #fff; }
+    .btn[disabled] { opacity: .5; cursor: default; }
+    .btn input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    .btn:focus-within, .btn:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+    figure { margin: 0; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: #fff; }
+    figure img { display: block; width: 100%; max-height: 55vh; object-fit: contain; background: #efeadb; }
+    .status { min-height: 1.5em; font-weight: 600; }
+    .status.is-error { color: var(--pink); }
+    .status.is-ok { color: var(--ok); }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="brand">Another Me</p>
+    <h1 id="title">Send a photo to the screen</h1>
+    <p id="lede">Choose a photo from your phone that says something about you. It will appear on the screen in front of you, where you can still decide whether to use it.</p>
+    <figure id="previewFrame" hidden><img id="preview" alt="The photo you chose"></figure>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+    <div class="actions" id="actions">
+      <label class="btn" id="pickLabel">Choose a photo<input id="pick" type="file" accept="image/*"></label>
+      <button type="button" class="btn btn--primary" id="send" hidden>Send to the screen</button>
+    </div>
+    <p class="hint" id="privacy">Before sending, your phone makes a smaller copy and removes its location and camera details. The copy passes through the Another Me server only to reach the screen and is deleted from the server as soon as the screen receives it, or after 10 minutes. Nothing else on your phone is accessed.</p>
+  </main>
+  <script src="/phone/phone.js"></script>
+</body>
+</html>

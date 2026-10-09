@@ -4,7 +4,7 @@
   if (typeof module === "object" && module.exports) module.exports = factory();
   else root.ProxyText = factory();
 })(typeof globalThis === "object" ? globalThis : this, function () {
-  const id = "(?:(?:story|question[_ -]*[1-3])[_ -]*follow[_ -]?up|reaction[_ -]*(?:story|synthesis)|correction[_ -]*(?:story|synthesis)|tension[_ -]*explanation|review[_ -]*(?:explanation|clarification)|questions?[_ -]*(?:[1-3]|one|two|three)|image[_ ]story|actual_prediction_answer|inference[_ -]*\\d+|uncertainty[_ -]*\\d+)";
+  const id = "(?:(?:story|question[_ -]*[1-3])[_ -]*follow[_ -]?up|reaction[_ -]*(?:story|synthesis)|correction[_ -]*(?:story|synthesis)|tension[_ -]*explanation|review[_ -]*(?:explanation|clarification)|stage[45][_ -]*(?:answer|correction|never)|questions?[_ -]*(?:[1-3]|one|two|three)|image[_ ]story|actual_prediction_answer|inference[_ -]*\\d+|uncertainty[_ -]*\\d+)";
   const list = `${id}(?:\\s*(?:,|;|and|&)\\s*(?:${id}|[1-3]))*`;
   const citation = new RegExp(`^[\\s]*(?:(?:based on|sources?|evidence|see)\\s*:?\\s*)?${list}[\\s.]*$`, "i");
   function clean(value) {

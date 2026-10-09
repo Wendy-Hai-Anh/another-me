@@ -9,7 +9,9 @@ const media = require("./media-service.cjs");
 const proxyText = require("../shared/proxy-text.js");
 const { createSimulation } = require("./simulation-service.cjs");
 const conversation = require("./conversation-service.cjs");
+const { SPEAKERS } = require("./voices.cjs");
 const feedback = require("./feedback-store.cjs");
+const handoff = require("./phone-handoff.cjs");
 const { validateParticipantAnswers } = require("./schemas.cjs");
 const { safeError, diagnosticCode } = require("./safe-errors.cjs");
 
@@ -24,7 +26,10 @@ const limits = {
   requests: { max: Number(process.env.REQUESTS_PER_10_MIN || 40), windowMs: 10 * 60_000, routes: null },
   media: { max: Number(process.env.MEDIA_PER_HOUR || 4), windowMs: 60 * 60_000, routes: new Set(["/api/cloned-speech", "/api/talking-avatar"]) },
   mediaDaily: { max: Number(process.env.MEDIA_PER_DAY || 40), windowMs: 24 * 60 * 60_000, routes: new Set(["/api/cloned-speech", "/api/talking-avatar"]), global: true },
-  feedback: { max: Number(process.env.FEEDBACK_PER_HOUR || 10), windowMs: 60 * 60_000, routes: new Set(["/api/feedback"]) }
+  feedback: { max: Number(process.env.FEEDBACK_PER_HOUR || 10), windowMs: 60 * 60_000, routes: new Set(["/api/feedback"]) },
+  // Phone photo handoff: the screen long-polls (about one request every 20 s); the phone sends at most a few photos.
+  handoffPoll: { max: 300, windowMs: 10 * 60_000, routes: new Set(["/api/handoff/wait", "/api/handoff/status", "/api/handoff/cancel"]) },
+  handoffPhoto: { max: 20, windowMs: 10 * 60_000, routes: new Set(["/api/handoff/photo"]) }
 };
 const hits = new Map();
 function overLimit(ip, pathname) {
@@ -32,7 +37,7 @@ function overLimit(ip, pathname) {
   for (const [name, rule] of Object.entries(limits)) {
     if (rule.routes && !rule.routes.has(pathname)) continue;
     // Feedback has its own small budget and does not use up the experience's request budget.
-    if (!rule.routes && pathname === "/api/feedback") continue;
+    if (!rule.routes && (pathname === "/api/feedback" || pathname.startsWith("/api/handoff/"))) continue;
     const key = rule.global ? name : `${name}:${ip}`;
     const recent = (hits.get(key) || []).filter(time => now - time < rule.windowMs);
     if (recent.length >= rule.max) { hits.set(key, recent); return true; }
@@ -145,10 +150,49 @@ const server = http.createServer(async (request, response) => {
         elevenlabs: Boolean(process.env.ELEVENLABS_API_KEY),
         did: Boolean(process.env.DID_API_KEY),
         accessCode: Boolean(accessCode),
-        feedback: feedback.mode()
+        feedback: feedback.mode(),
+        phoneUpload: true
       }); return;
     }
     if (request.method === "GET" && url.pathname === "/favicon.ico") { response.writeHead(204).end(); return; }
+    // Phone photo handoff: the page the phone opens from the QR code, and the routes that carry one photo to the screen.
+    const phonePage = /^\/phone\/([A-Za-z0-9_-]{22})\/?$/.exec(url.pathname);
+    if (["GET", "HEAD"].includes(request.method) && (phonePage || url.pathname === "/phone/phone.js")) {
+      const [name, type] = phonePage ? ["server/phone/index.html", html] : ["server/phone/phone.js", js];
+      headers(response, type);
+      response.setHeader("Referrer-Policy", "no-referrer");
+      response.setHeader("X-Frame-Options", "DENY");
+      response.writeHead(200).end(request.method === "HEAD" ? undefined : await fs.readFile(path.join(root, name))); return;
+    }
+    const handoffRoute = /^\/api\/handoff(?:\/([A-Za-z0-9_-]{22})\/(wait|status|cancel|photo))?$/.exec(url.pathname);
+    if (handoffRoute) {
+      const [, id, action] = handoffRoute;
+      const expected = { undefined: "POST", wait: "GET", status: "GET", cancel: "POST", photo: "POST" }[action];
+      if (request.method !== expected) { json(response, 405, { error: "Method not allowed." }); return; }
+      if (!originAllowed(request.headers.origin, request)) { json(response, 403, { error: "This site is not allowed to use the server.", code: "origin_not_allowed" }); return; }
+      // Only the screen needs the access code; the phone holds the one-time code instead.
+      if (!action && accessCode && !codeMatches(request.headers["x-access-code"])) { json(response, 401, { error: "An access code is needed to use the live AI. Ask the researcher for it.", code: "access_code_required" }); return; }
+      const ip = String(request.headers["x-forwarded-for"] || "").split(",")[0].trim() || request.socket.remoteAddress || "unknown";
+      if (overLimit(ip, action ? `/api/handoff/${action}` : "/api/handoff")) { json(response, 429, { error: "Too many requests from this device. Wait a few minutes, then try again.", code: "rate_limit" }); return; }
+      if (!action) { json(response, 200, handoff.create(request, host)); return; }
+      if (action === "status") { json(response, 200, handoff.status(id)); return; }
+      if (action === "cancel") { handoff.cancel(id); response.writeHead(204).end(); return; }
+      if (action === "photo") {
+        if ((request.headers["content-type"] || "").split(";", 1)[0].toLowerCase() !== "image/jpeg") { json(response, 415, { error: "That photo couldn't be sent. Try another one." }); return; }
+        handoff.upload(id, await body(request, handoff.MAX_PHOTO_BYTES));
+        json(response, 200, { status: "sent" }); return;
+      }
+      const controller = new AbortController();
+      const cancel = () => controller.abort();
+      response.on("close", cancel);
+      try {
+        const result = await handoff.wait(id, 20_000, controller.signal);
+        if (response.destroyed) return;
+        if (result.status === "ready") { headers(response, "image/jpeg"); response.writeHead(200).end(result.photo); return; }
+        if (result.status === "waiting") { response.writeHead(204).end(); return; }
+        json(response, 410, { error: "This phone code has expired.", code: "handoff_gone" }); return;
+      } finally { response.off("close", cancel); }
+    }
     // The researcher downloads stored feedback with a separate token; it is never shown to participants.
     if (request.method === "GET" && url.pathname === "/api/feedback/export") {
       const token = process.env.FEEDBACK_EXPORT_TOKEN || "";
@@ -156,7 +200,7 @@ const server = http.createServer(async (request, response) => {
       if (!token || Buffer.byteLength(given) !== Buffer.byteLength(token) || !require("node:crypto").timingSafeEqual(Buffer.from(given), Buffer.from(token))) { json(response, 401, { error: "Not allowed." }); return; }
       headers(response, "application/x-ndjson; charset=utf-8"); response.writeHead(200).end(await feedback.exportAll()); return;
     }
-    if (request.method !== "POST" || !["/api/transcribe","/api/profile","/api/predict","/api/proxy","/api/fiction","/api/simulation","/api/cloned-speech","/api/talking-avatar","/api/image-reading","/api/reply","/api/synthesis","/api/review","/api/feedback"].includes(url.pathname)) { json(response, 404, { error: "Not found." }); return; }
+    if (request.method !== "POST" || !["/api/transcribe","/api/profile","/api/predict","/api/proxy","/api/fiction","/api/simulation","/api/cloned-speech","/api/talking-avatar","/api/image-reading","/api/reply","/api/synthesis","/api/review","/api/commentary","/api/inference","/api/feedback"].includes(url.pathname)) { json(response, 404, { error: "Not found." }); return; }
     if (!originAllowed(request.headers.origin, request)) { json(response, 403, { error: "This site is not allowed to use the server.", code: "origin_not_allowed" }); return; }
     // Feedback is optional and free to store, so it does not need the AI access code.
     if (accessCode && url.pathname !== "/api/feedback" && !codeMatches(request.headers["x-access-code"])) { json(response, 401, { error: "An access code is needed to use the live AI. Ask the researcher for it.", code: "access_code_required" }); return; }
@@ -198,9 +242,12 @@ const server = http.createServer(async (request, response) => {
     }
     const input = await jsonBody(request);
     if (url.pathname === "/api/feedback") { json(response, 200, await withCancel(signal => feedback.store(input, { signal }))); return; }
-    if (url.pathname === "/api/reply") { json(response, 200, { reply: await withCancel(signal => conversation.reply(input, { signal })) }); return; }
-    if (url.pathname === "/api/synthesis") { json(response, 200, { synthesis: await withCancel(signal => conversation.synthesise(input, { signal })) }); return; }
-    if (url.pathname === "/api/review") { json(response, 200, { review: await withCancel(signal => conversation.reviewReply(input, { signal })) }); return; }
+    // Speaking about the participant: the system interpreter.
+    if (url.pathname === "/api/reply") { json(response, 200, { speaker: SPEAKERS.SYSTEM, reply: await withCancel(signal => conversation.reply(input, { signal })) }); return; }
+    if (url.pathname === "/api/synthesis") { json(response, 200, { speaker: SPEAKERS.SYSTEM, synthesis: await withCancel(signal => conversation.synthesise(input, { signal })) }); return; }
+    if (url.pathname === "/api/review") { json(response, 200, { speaker: SPEAKERS.SYSTEM, review: await withCancel(signal => conversation.reviewReply(input, { signal })) }); return; }
+    if (url.pathname === "/api/commentary") { json(response, 200, { speaker: SPEAKERS.SYSTEM, commentary: await withCancel(signal => conversation.commentary(input, { signal })) }); return; }
+    if (url.pathname === "/api/inference") { json(response, 200, { speaker: SPEAKERS.SYSTEM, ...(await withCancel(signal => conversation.inferenceSequence(input, { signal }))) }); return; }
     if (url.pathname === "/api/simulation") {
       if (!input || !Array.isArray(input.answers) || input.answers.length > 20 || !input.answers.every(a => a && typeof a.id === "string" && typeof a.answer === "string" && a.answer.length <= 4000)
         || input.context && (typeof input.context !== "object" || Array.isArray(input.context))
@@ -218,7 +265,7 @@ const server = http.createServer(async (request, response) => {
       const timer = setTimeout(() => controller.abort(), 150_000);
       const cancel = () => { if (!response.writableEnded) controller.abort(); };
       response.on("close", cancel);
-      try { json(response, 200, { simulation: await createSimulation(input, { signal: controller.signal }) }); }
+      try { json(response, 200, { speaker: SPEAKERS.DOUBLE, simulation: await createSimulation(input, { signal: controller.signal }) }); }
       catch (error) {
         if (controller.signal.aborted) throw Object.assign(new Error("Simulation timed out."), { statusCode: 504, publicMessage: "The hypothetical simulation took too long. Your earlier information is unchanged; you can retry or skip." });
         throw error;
@@ -245,10 +292,12 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === "/api/predict") {
       if (typeof input.target_question !== "string" || !input.target_question.trim()) throw Object.assign(new Error("A target question is required."), { statusCode: 400 });
+      // The double predicts before the participant answers: their own Stage 4 (or later) answers must never be in the request.
+      if (input.answers.some(answer => /^stage[45]_/.test(answer?.id || ""))) throw Object.assign(new Error("The prediction cannot use the participant's own answer to this situation."), { statusCode: 400, code: "prediction_leak" });
       const result = await adapter.createPrediction({ answers: input.answers, profile: input.profile, targetQuestion: input.target_question });
-      json(response, 200, { prediction: result.data }); return;
+      json(response, 200, { speaker: SPEAKERS.DOUBLE, prediction: result.data }); return;
     }
-    if (url.pathname === "/api/proxy") { json(response, 200, { response: await adapter.generate("proxy", input.answers, input.question, input.context) }); return; }
+    if (url.pathname === "/api/proxy") { json(response, 200, { speaker: SPEAKERS.DOUBLE, response: await adapter.generate("proxy", input.answers, input.question, input.context) }); return; }
     if (url.pathname === "/api/fiction") { json(response, 200, { fiction: await adapter.generate("fiction", input.answers, "Invent a clearly fictional hypothetical memory.", input.context) }); return; }
   } catch (error) {
     const [code, message] = safeError(error);

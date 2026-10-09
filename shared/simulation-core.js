@@ -18,7 +18,7 @@
   // Stage 6 situation chosen from user testing. The app requests it by id; it is always eligible, because
   // it is the situation the experience is built around rather than a novelty draw from the pool.
   const fixed = {
-    "overlooked-helper": { id: "overlooked-helper", title: "The person who helped", scenario: "Months from now, you receive recognition for something you worked hard to achieve. During the celebration, someone who helped you along the way says, within earshot of others: 'I'm happy for you. I just wish you'd remembered who helped you get here.' You had not intended to make them feel overlooked.", action: "ask them for a private conversation the next day and name their contribution in a follow-up message to the group", dialogue: "You're right that I should have said it. Can we talk properly tomorrow?" }
+    "overlooked-helper": { id: "overlooked-helper", title: "The person who helped", scenario: "Months from now, you receive recognition for something you worked hard to achieve. During the celebration, someone who helped you along the way says, within earshot of others: 'I'm happy for you. I just wish you'd remembered who helped you get here.' You had not intended to make them feel overlooked.", action: "I ask them for a private conversation the next day and name their contribution in a follow-up message to the group", dialogue: "You're right that I should have said it. Can we talk properly tomorrow?" }
   };
   const str = { type: "string" };
   const list = { type: "array", items: str };
@@ -122,14 +122,14 @@
     const pause = /wait|quiet|withdraw|time to think|reflect/i.test(text);
     const result = {
       scenario_id: s.id, scenario_title: s.title, scenario: s.scenario,
-      predicted_decision: s.id === "overlooked-helper" ? (pause ? "One possible version of you might let the moment pass in public and decide to repair it in private." : "One possible version of you might decide the omission needs fixing in front of the same people who heard it.")
+      predicted_decision: s.id === "overlooked-helper" ? (pause ? "I let the moment pass in public and decide to repair it in private, even though it means sitting with the awkwardness." : "I decide the omission needs fixing in front of the same people who heard it, even if it dents the celebration.")
         : pause ? "One possible version of you might pause to understand the problem before committing to a response." : "One possible version of you might choose a small, direct step instead of leaving the problem unresolved.",
-      predicted_action: `You might ${pause ? "first ask for a moment to think, then " : ""}${s.action}.`,
-      predicted_thought: s.id === "overlooked-helper" ? "You might feel a flash of embarrassment, then a quieter worry that they have been keeping this to themselves for a while." : "You might weigh the discomfort of speaking up against the uncertainty of doing nothing. Your actual reaction is unknown.",
+      predicted_action: s.id === "overlooked-helper" ? `${pause ? "I ask for a moment to think first. Then " : ""}${pause ? s.action.replace(/^I /, "I ") : s.action}.` : `You might ${pause ? "first ask for a moment to think, then " : ""}${s.action}.`,
+      predicted_thought: s.id === "overlooked-helper" ? "I feel a flash of embarrassment, then a quieter worry that they have been keeping this to themselves for a while." : "You might weigh the discomfort of speaking up against the uncertainty of doing nothing. Your actual reaction is unknown.",
       predicted_dialogue: s.dialogue,
       recognised_reasoning: "This demonstration does not read your answers; any resemblance to your reasoning is a coincidence.",
       invented_leap: s.id === "overlooked-helper" ? "That you would name their contribution to the whole group afterwards." : "The whole decision is a prepared example.",
-      predicted_consequence: s.id === "overlooked-helper" ? "They might soften a little, but the people nearby have already heard it, and the celebration might feel quieter for the rest of the evening." : "The other person could respond constructively or disagree; the outcome is unknown.",
+      predicted_consequence: s.id === "overlooked-helper" ? "They soften a little, but the people nearby have already heard it, and the celebration feels quieter for the rest of the evening." : "The other person could respond constructively or disagree; the outcome is unknown.",
       evidence: context.sources.slice(0, 3).map(s => ({ source_id: s.id, source: s.label, type: s.type, interpretation: "This eligible source was available to the rule-based demonstration; it does not establish how you would act." })),
       generated_elements: ["The situation", "The possible decision and action", "The imagined internal reaction", "The dialogue and possible consequence"],
       contradictory_evidence: context.contradictions,

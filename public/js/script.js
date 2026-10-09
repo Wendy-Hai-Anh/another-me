@@ -16,13 +16,17 @@ const stageCaptions = [
   "Choose whether the system may answer on your behalf.",
   "Review clearly fictional content generated without your input."
 ];
+// Scenario text shown to participants and sent with every answer to the model. Edit wording here only.
+// scenarioVersion distinguishes this wording from earlier sessions' answers.
+const scenarioVersion = "s3-2026-10-09/s4-family-2026-10-09";
 const questions = [
-  "A close friend cancels your plans an hour before you're supposed to meet. It's the third time this month, and you turned down another invitation to keep the evening free. They apologise and say they've had a difficult week. What would you say to them, and what would you do about making plans again?",
-  "During a group presentation, a teammate presents an idea you developed together as though it was entirely theirs. The person assessing the work praises them. Your teammate then moves on without mentioning your contribution. What would you do in that moment, and what would you say afterwards?",
-  "Your closest friend is getting married, and you promised a year ago that you would attend and give a speech. Your manager now offers you a place at an important client meeting in another city on the same afternoon. It could improve your chances of promotion, but nothing is guaranteed. You cannot attend both. Which would you choose, and how would you explain your decision to the person you disappoint?"
+  "A close friend cancels an hour before you're due to meet. It's the third time this month, and you turned down another invitation to keep the evening free. Someone they like has just asked them out, and they say, “You understand, right? We can hang out anytime.” What would you say to them, and what would you do about making plans again?",
+  "Your team developed a project together. Presenting it, one teammate tells the assessor, “Thank you. I came up with it and developed the direction myself,” and carries on without crediting anyone while the rest of you stand beside them. The assessor is about to move on. What would you do in that moment, and what would you say to your teammate afterwards?",
+  "A year ago you promised to give a speech at your closest friend's wedding. Your manager offers you to lead a major client pitch in another city that same afternoon: take it and your promotion is practically guaranteed; turn it down and it goes to someone else. Your friend says, “I need you there. You promised.” Which would you choose, and how would you explain your decision to the person you disappoint?"
 ];
 const storyQuestion = "What would I misunderstand about you if this image were all I had?";
-const dilemma = "A friend promised to help you prepare for an important presentation tomorrow. They now have a chance to interview for a job they really want, at the same time you arranged to work together. They ask whether you would be upset if they went. You would have to finish the preparation alone.";
+// Stage 4 is hypothetical: it never implies the participant has a sibling or lives with their parents.
+const dilemma = "You've saved for two years to move out of your family home, and you sign the lease next week. Your parents ask you to give most of your savings to your adult sibling, whose business is failing after a risky decision the family warned against. Your sibling promises to repay you but can't say when. “Family comes first,” your parents say. “Money can be earned again.” They want an answer tonight. What would you say to them, and what would you do?";
 const proxyQuestion = "Someone close to you has volunteered you to help with an event this weekend without asking. You had deliberately kept that time free for yourself. They message: 'I told them you'd help. You're always the reliable one.'";
 const labels = {
   supplied: ["+", "SUPPLIED BY YOU"], transcribed: ["T", "TRANSCRIBED FROM YOUR AUDIO"],

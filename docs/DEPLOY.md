@@ -70,6 +70,16 @@ Commit and push. Pages republishes; the site now asks visitors for the access co
 
 `npm start`, then http://127.0.0.1:4187/. Locally there is no access code unless you set `ACCESS_CODE` in `.env.local`, and the page talks to its own server.
 
+## Photos from the participant's phone
+
+Stage 1 offers *Use a photo from your phone* next to *Choose an image* and *Use camera*. The screen shows a QR code; the participant scans it, picks a photo from their own phone, and it appears on the screen for them to confirm. The phone has to reach the same server as the screen:
+
+- **Published site + Render (recommended for an exhibition).** Works with no setup: the QR code points at `https://another-me-api.onrender.com/phone/…`, which any phone with mobile data or Wi-Fi can open. Open the experience a minute before visitors arrive so the free Render server is awake.
+- **Laptop running the server itself.** By default the local server listens only on the laptop (127.0.0.1), so the option says it isn't available on this setup. To use it, start the server with `HOST=0.0.0.0` and keep the laptop and phone on the same Wi-Fi; the QR code then uses the laptop's network address. Many university, venue and guest networks block devices from reaching each other, in which case use the published site instead. This also makes your local server (and its AI routes) reachable by anyone on that network, so set `ACCESS_CODE` when you do it.
+- `PHONE_BASE_URL` overrides the address in the QR code (for example a tunnel address). It must lead to this same server.
+
+Each code works once, for one photo, for 10 minutes. The phone sends a resized copy re-encoded without location or camera details, and the server strips any remaining metadata. The photo is held only in the server's memory and deleted when the screen collects it, when the code is cancelled or replaced, when the screen leaves Stage 1, or after 10 minutes. Nothing is written to disk.
+
 ## Privacy: personal media in git history
 
 Portraits, the voice sample, cloned-voice audio and D-ID videos were committed earlier and pushed to this **public** repository. They are no longer tracked (`archive/media-samples/` is git-ignored and still on your computer), but every old commit still contains them under these paths:
