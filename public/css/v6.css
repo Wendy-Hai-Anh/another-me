@@ -641,6 +641,8 @@ body.is-passing .scrim{opacity:.18}
 .access-field{max-width:360px;text-align:left}
 .access-field input{width:100%;min-height:44px;padding:10px 14px;border-radius:10px;border:1px solid rgb(var(--fg-rgb) / .22);background:var(--field);color:var(--fg);font:16px/1.4 var(--sans)}
 .access-field input:focus{border-color:var(--accent)}
+#accessDialog{height:auto;max-height:85dvh;width:min(560px,94vw)}
+#accessForm{display:grid;gap:14px;max-width:none;margin-top:18px}
 
 /* ---------- overall scale: every interface element 10% smaller (tunnel stays full-size) ---------- */
 /* Phones keep the original size so body text stays readable. The shell's height is divided by the

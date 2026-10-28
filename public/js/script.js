@@ -50,9 +50,15 @@ const appConfig = window.ANOTHER_ME_CONFIG || { apiBase: "", serverless: false }
 // Demonstration mode: asked for with ?mode=mock, or automatic on a static host with no AI server.
 const mockMode = query.get("mode") === "mock" || !!appConfig.serverless;
 const apiUrl = path => `${appConfig.apiBase || ""}${path}`;
+let accessCodeMemory = "";
+try { accessCodeMemory = sessionStorage.getItem("another-me-access") || ""; } catch { /* use page memory */ }
+function getAccessCode() { return accessCodeMemory; }
+function setAccessCode(value) {
+  accessCodeMemory = String(value || "").trim();
+  try { sessionStorage.setItem("another-me-access", accessCodeMemory); } catch { /* page memory still works */ }
+}
 function apiHeaders(extra = {}) {
-  let code = "";
-  try { code = sessionStorage.getItem("another-me-access") || ""; } catch { /* storage blocked: no code */ }
+  const code = getAccessCode();
   return code ? { ...extra, "X-Access-Code": code } : extra;
 }
 const forcedFailure = query.get("fail") || "";
@@ -746,6 +752,7 @@ function invalidateAnalysis() {
   });
 }
 function responseFailure(response, message = "The service request failed.", diagnostic = "") {
+  if (diagnostic === "access_code_required") window.dispatchEvent(new Event("another-me-access-required"));
   if (/^[a-z][a-z0-9_]{1,64}$/.test(diagnostic)) return Object.assign(new OperationFailure(diagnostic, message, response.status), { safeDiagnostic: true });
   const normalized = String(message).toLowerCase();
   const code = response.status === 429 || normalized.includes("rate limit") || normalized.includes("quota") ? "rate_limit"

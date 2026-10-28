@@ -22,6 +22,11 @@ test("published site rules: CORS allow-list, access code and rate limit", async 
 
     const capabilities = await (await fetch(`${base}/api/capabilities`, { headers: { Origin: site } })).json();
     assert.equal(capabilities.accessCode, true);
+    assert.equal(capabilities.accessGranted, false);
+    const check = async code => (await (await fetch(`${base}/api/capabilities`, { headers: { Origin: site, "X-Access-Code": code } })).json()).accessGranted;
+    assert.equal(await check("wrong-code"), false);
+    assert.equal(await check("synthetic-code"), true);
+    assert.equal(await check(""), false);
 
     const post = (code, origin = site) => fetch(`${base}/api/simulation`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json", ...(code ? { "X-Access-Code": code } : {}) }, body: "{}" });
     assert.equal((await post("", "https://elsewhere.example")).status, 403);

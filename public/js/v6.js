@@ -129,7 +129,7 @@
 
   /* ---------- failures: calm on the surface, specific on request ---------- */
   function failureKind(code = "") {
-    if (/access_code/.test(code)) return ["Access code needed", "The live AI asks for the researcher's access code.", "Enter the access code on the first screen, then try again."];
+    if (/access_code/.test(code)) return ["Access code needed", "The server did not accept an access code for this request.", "Choose Session > Live AI access, verify the researcher's code, then retry. Your inputs are kept."];
     if (/origin_not_allowed/.test(code)) return ["Site not allowed", "The AI server does not list this website.", "The researcher needs to add this site to ALLOWED_ORIGINS."];
     if (/missing_api_key|invalid_api_key|credentials|not_configured/.test(code)) return ["Service not set up", "The AI provider is missing or rejected the server's credentials.", "The researcher needs to check the server's API keys."];
     if (/rate_limit/.test(code)) return ["Service busy", "Too many requests arrived in a short time.", "Wait a few minutes; it should work again."];
@@ -258,7 +258,7 @@
     <p class="opening__lede">Give it an image, your voice and a few answers. It will talk with you, form an interpretation of you, and then speak as you.</p>
     <p class="opening__note">What it builds is a model, not you. You can correct it, reject it or delete everything at any time.</p>
     ${appConfig.serverless ? '<p class="opening__note">Online demonstration: the AI text is simulated and nothing you enter leaves this browser. The full version with live AI, voice and the talking double runs with the project server.</p>' : ""}
-    ${capabilities?.accessCode && !mockMode ? `<div class="field access-field"><label for="accessCode">Access code for the live AI (from the researcher)</label><input id="accessCode" type="password" autocomplete="off" value="${esc(storedAccessCode())}"></div>` : ""}
+    ${!mockMode ? `<div class="field access-field"><label for="accessCode">Access code for the live AI (from the researcher)</label><input id="accessCode" type="password" autocomplete="off" value="${esc(storedAccessCode())}" aria-describedby="accessStatus"><p id="accessStatus" class="hint" role="status">${esc(accessMessage || "Your code is checked when you enter. This is not your API key.")}</p></div>` : ""}
     ${row(act("begin", "Enter", "btn-primary btn-large"))}
     <div class="opening__more"><details><summary>What happens to my information?</summary><p>Your session lives only in this browser's memory, not a database. What you supply, what the AI infers and what it generates are always labelled separately. External AI services (OpenAI, ElevenLabs, D-ID) are used only after you allow each one, and their own retention policies apply.</p></details>
     <details><summary>How long does it take?</summary><p>About 10–15 minutes, in six stages that go progressively deeper. You can skip, go back or leave whenever you like. Quiet music plays; switch it off with the Music button.</p></details></div></div>`);
@@ -534,6 +534,7 @@
     try {
       const response = await fetch(apiUrl("/api/handoff"), { method: "POST", headers: apiHeaders(), cache: "no-store" });
       data = await response.json().catch(() => null);
+      if (data?.code === "access_code_required") window.dispatchEvent(new Event("another-me-access-required"));
       if (!response.ok) data = { error: data?.error || "" };
     } catch { data = null; }
     if (ticket !== phoneTicket || session !== sessionState) return;
@@ -1744,8 +1745,12 @@
     if (blocked) return base.move(direction);
     travel(() => base.move(direction), direction === "back" ? -1 : 1, changesStage ? markerFor(stage + (direction === "back" ? -1 : 1)) : null);
   };
-  function begin() {
+  async function begin() {
+    if (checkingAccess || transitioning) return;
     music.unlock();
+    const currentSession = sessionState;
+    if (!mockMode && !await verifyAccess(document.getElementById("accessCode")?.value ?? storedAccessCode())) return;
+    if (currentSession !== sessionState || sessionState.ended) return;
     travel(() => { sessionState.started = true; sessionState.currentStage = 1; render(); }, 1, markerFor(1));
   }
 
@@ -1898,14 +1903,55 @@
   }, 1000);
 
   /* ---------- events ---------- */
-  function storedAccessCode() { try { return sessionStorage.getItem("another-me-access") || ""; } catch { return ""; } }
+  let checkingAccess = false, accessMessage = "";
+  function storedAccessCode() { return getAccessCode(); }
+  function accessStatus(message) {
+    accessMessage = message;
+    for (const id of ["accessStatus", "accessRecoveryStatus"]) { const node = document.getElementById(id); if (node) node.textContent = message; }
+  }
+  async function verifyAccess(value) {
+    if (checkingAccess) return false;
+    checkingAccess = true;
+    setAccessCode(value);
+    accessStatus("Checking access with the server...");
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 25000);
+    try {
+      const response = await fetch(apiUrl("/api/capabilities"), { headers: apiHeaders(), cache: "no-store", signal: controller.signal });
+      if (!response.ok) throw new Error("connection");
+      const result = await response.json();
+      if (typeof result.accessCode !== "boolean") throw new Error("connection");
+      capabilities = result;
+      if (result.accessCode && result.accessGranted !== true) {
+        accessStatus(result.accessGranted === undefined ? "The server needs the access-check update. Please ask the researcher to deploy it." : storedAccessCode() ? "That code was not accepted. Check it with the researcher and try again." : "Enter the researcher's access code to use the live AI.");
+        return false;
+      }
+      accessStatus("Access verified. This checks authorization, not provider credits or availability.");
+      return true;
+    } catch { accessStatus("The AI server could not be reached yet. It may be waking up. Please try again; your inputs are unchanged."); return false; }
+    finally { clearTimeout(timer); checkingAccess = false; }
+  }
+  function openAccess() {
+    if (mockMode) return;
+    const modal = document.getElementById("accessDialog");
+    document.getElementById("recoveryAccessCode").value = storedAccessCode();
+    accessStatus("Enter the researcher's code. Your image and answers will stay here.");
+    if (!modal.open) modal.showModal();
+    document.getElementById("recoveryAccessCode").focus();
+  }
+  window.addEventListener("another-me-access-required", openAccess);
+  document.getElementById("accessForm").addEventListener("submit", async event => {
+    event.preventDefault();
+    if (await verifyAccess(document.getElementById("recoveryAccessCode").value)) {
+      accessStatus("Access verified. Close this panel and retry the failed action. Nothing has been uploaded again automatically.");
+    }
+  });
   document.addEventListener("toggle", event => {
     const d = event.target;
     if (d?.matches?.("details[data-keep]")) d.open ? keptOpen.add(d.dataset.keep) : keptOpen.delete(d.dataset.keep);
   }, true);
   document.addEventListener("input", event => {
     const s = sessionState, u = ui(), c = u.conv, id = event.target.id;
-    if (id === "accessCode") { try { sessionStorage.setItem("another-me-access", event.target.value.trim()); } catch { /* kept for this page only */ } }
+    if (["accessCode", "recoveryAccessCode"].includes(id)) setAccessCode(event.target.value);
     if (id === "imageDescription") s.supplied.imageDescription = event.target.value;
     if (id === "followText") {
       const key = s.currentStage === 2 ? "story" : `question_${s.questionIndex + 1}`, m = c.moments[key];
@@ -1939,6 +1985,8 @@
     const button = event.target.closest("button,[data-action],summary");
     if (!button) return;
     const s = sessionState, u = ui(), c = u.conv, action = button.dataset.v6, old = button.dataset.action;
+    if (action === "open-access") { event.preventDefault(); event.stopImmediatePropagation(); document.getElementById("sessionMenu").open = false; openAccess(); return; }
+    if (action === "close-access") { event.preventDefault(); event.stopImmediatePropagation(); document.getElementById("accessDialog").close(); return; }
     if (button.closest("#sessionMenu") && button.tagName === "BUTTON") document.getElementById("sessionMenu").open = false;
     if (button.id === "motionToggle") {
       event.stopImmediatePropagation(); room.reduce(!room.reduced);
@@ -2063,7 +2111,8 @@
   addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (!transitioning) render(); }, 150); });
   addEventListener("pagehide", () => { clearReveal(); stopPhone(); cancelTransition(); room.dispose(); music.setActive(false); });
   if (appConfig.serverless) capabilities = { openai: false, elevenlabs: false, did: false, accessCode: false, demo: true };
-  else fetch(apiUrl("/api/capabilities"), { headers: apiHeaders() }).then(r => r.ok ? r.json() : null).then(value => { capabilities = value; render(); }).catch(() => {});
+  else fetch(apiUrl("/api/capabilities"), { cache: "no-store" }).then(r => r.ok ? r.json() : null).then(value => { if (value) { capabilities = value; if (sessionState.started) render(); } }).catch(() => {});
+  document.querySelector('[data-v6="open-access"]').hidden = mockMode;
 
   /* ---------- stale-build protection: an old tab says so instead of silently lagging ---------- */
   const buildNotice = document.getElementById("buildNotice");

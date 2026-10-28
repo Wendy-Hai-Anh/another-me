@@ -150,6 +150,7 @@ const server = http.createServer(async (request, response) => {
         elevenlabs: Boolean(process.env.ELEVENLABS_API_KEY),
         did: Boolean(process.env.DID_API_KEY),
         accessCode: Boolean(accessCode),
+        accessGranted: !accessCode || codeMatches(request.headers["x-access-code"]),
         feedback: feedback.mode(),
         phoneUpload: true
       }); return;
