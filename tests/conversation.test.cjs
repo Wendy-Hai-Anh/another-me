@@ -203,3 +203,24 @@ test("sparse answers get no interpretation and no tension, at most an open quest
   const open = { ...overreach, interpretation: { offer: false, claim: "", inferred: "", unknown: "", evidence: [] }, uncertainty: { present: true, about: "I don't know yet what would make you say more than a few words.", question: "What would make you speak up instead of saying it's fine?" } };
   assert.equal((await conversation.synthesise({ answers: sparse }, { client: fakeClient(open) })).uncertainty.present, true);
 });
+
+test("the ending: the double answers first and introduces itself, and takes a correction on board", async () => {
+  const answers = [story, { id: "question_1", question: "Credit taken in a meeting", answer: "I'd say nothing in the room and mention it after, quietly." }];
+  const judgements = [{ stage: "stage4", verdict: "corrected", text: "Family dilemma. Their correction: I would give in more than that." }];
+  const forgot = { answer: "Partly. I'd still keep quiet in the room.", introduction: ["I am you.", "I chose my desk because I only work like that when I panic.", "In a meeting I say nothing and mention it after."], evidence_ids: ["image_story", "question_1"] };
+  const reading = { came_close: "how you handle credit at work", missed: "how much you give way with family" };
+  const good = { ...forgot, introduction: [...forgot.introduction, "You corrected me: I would give in more than that."] };
+  // Without the "You corrected me:" line the double is sent back once; the system's reading is separate.
+  const client = fakeClient(forgot, reading, good);
+  const result = await conversation.closing({ answers, judgements }, { client });
+  assert.equal(client.requests.length, 3);
+  assert.match(client.requests[0].instructions, /participant_double/);
+  assert.match(client.requests[1].instructions, /system_interpreter/);
+  assert.equal(result.double.introduction.at(-1), "You corrected me: I would give in more than that.");
+  assert.deepEqual(result.reading, reading);
+
+  // No judgements: no reading is asked for. Appearance is never described, and a double that keeps failing is an error.
+  const looks = { ...forgot, introduction: ["I am you.", "My face looks tired in this light."] };
+  await assert.rejects(conversation.closing({ answers }, { client: fakeClient(looks, looks, looks) }));
+  await assert.rejects(conversation.closing({ answers, judgements: [{ stage: "stage9", verdict: "accepted", text: "x" }] }, { client: fakeClient() }));
+});

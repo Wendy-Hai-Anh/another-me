@@ -33,7 +33,7 @@ body[data-depth="5"] .scrim,body[data-depth="threshold"] .scrim{background:radia
 body[data-depth="6"] .scrim,body[data-depth="ending"] .scrim{background:radial-gradient(ellipse 58% 52% at 50% 48%,rgb(var(--shade-rgb) / .7),rgb(var(--shade-rgb) / .3) 62%,rgb(var(--shade-rgb) / .88))}
 
 /* ---------- shell ---------- */
-.shell{position:relative;z-index:2;height:100dvh;display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr) auto;grid-template-areas:"top top" "rail main" "nav nav"}
+.shell{position:relative;z-index:2;height:var(--app-h,100dvh);display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr) auto;grid-template-areas:"top top" "rail main" "nav nav"}
 .shell:not(.has-rail){grid-template-columns:0 minmax(0,1fr)}
 .shell:not(.has-rail) .depth-rail{display:none}
 .topbar{grid-area:top;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px clamp(16px,2.4vw,28px) 6px}
@@ -650,7 +650,7 @@ body.is-passing .scrim{opacity:.18}
 @media (min-width:621px){
   :root{--ui-scale:.9}
   .shell,dialog,.stage-transition,.build-notice{zoom:var(--ui-scale)}
-  .shell{height:calc(100dvh / var(--ui-scale))}
+  .shell{height:calc(var(--app-h,100dvh) / var(--ui-scale))}
 }
 
 /* ---------- the conversation: one utterance at a time ---------- */
@@ -751,3 +751,69 @@ body.is-passing .scrim{opacity:.18}
 .interlude__line--final{margin-top:12px;padding-top:16px;border-top:1px solid rgb(var(--fg-rgb) / .15);color:var(--muted);font-size:clamp(1.02rem,.95rem + .35vw,1.2rem)}
 .interlude__line.is-fresh{animation:line-in .6s var(--ease) both}
 @keyframes line-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* ---------- Stage 5: what the double changed after the Stage 4 correction ---------- */
+.double-changed{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 10px;margin:4px 0 10px;padding:10px 14px;border-left:2px solid rgb(var(--generated-rgb) / .55);background:rgb(var(--generated-rgb) / .06);border-radius:0 10px 10px 0;font-size:14.5px;line-height:1.5;max-width:60ch}
+
+/* ---------- the last question: the double answers first ---------- */
+.double-first{display:flex;flex-direction:column;gap:8px;padding:16px 18px;border:1px solid rgb(var(--generated-rgb) / .3);border-radius:14px;background:rgb(var(--generated-rgb) / .05);max-width:640px}
+.double-first .tag{align-self:flex-start}
+.final-you{margin-top:6px}
+
+/* ---------- the participant's image, carried to the reading and the ending ---------- */
+.closing-image{display:flex;flex-direction:column;gap:8px;margin:0}
+.closing-image img{display:block;width:100%;aspect-ratio:1;object-fit:cover;border-radius:14px;border:1px solid rgb(var(--fg-rgb) / .18)}
+.closing-image--words p{display:grid;place-items:center;aspect-ratio:1;padding:16px;border-radius:14px;border:1px dashed rgb(var(--supplied-rgb) / .5);font:italic 400 15px/1.5 var(--serif);text-align:center}
+.closing-image figcaption .tag{align-self:flex-start}
+.closing-image--small{flex-direction:row;align-items:center;gap:12px}
+.closing-image--small img,.closing-image--small p{width:72px;flex:none;border-radius:10px}
+.closing-image--small.closing-image--words p{width:auto;aspect-ratio:auto;padding:8px 12px;font-size:13.5px}
+
+/* ---------- the ending: the double introduces itself, beside how close it came ---------- */
+.ending--closing{gap:clamp(16px,2.6vh,24px)}
+.ending__title{font:400 clamp(1.6rem,1.1rem + 1.8vw,2.5rem)/1.12 var(--serif);letter-spacing:-.02em}
+.closing{display:grid;grid-template-columns:minmax(150px,220px) minmax(0,1fr);gap:clamp(16px,3vw,32px);align-items:start;width:100%;max-width:820px;text-align:left}
+.closing--no-image{grid-template-columns:minmax(0,1fr)}
+.closing__intro{display:flex;flex-direction:column;gap:10px;min-width:0}
+.closing__intro .tag{align-self:flex-start}
+.closing__lines{display:flex;flex-direction:column;gap:8px}
+.closing__lines li{font:400 clamp(1.05rem,.95rem + .45vw,1.3rem)/1.5 var(--serif);text-shadow:0 0 28px rgb(var(--generated-rgb) / .3)}
+.closing__lines li:first-child{font-size:clamp(1.25rem,1.05rem + .8vw,1.6rem)}
+.closeness{display:flex;flex-direction:column;gap:14px;width:100%;max-width:820px;padding:18px clamp(14px,2.4vw,24px);border:1px solid rgb(var(--fg-rgb) / .12);border-radius:16px;background:rgb(var(--shade-rgb) / .45);text-align:left}
+.closeness__markers{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:clamp(12px,2vw,24px)}
+.closeness__marker{display:flex;flex-direction:column;gap:10px;min-width:0}
+.closeness__marker .column-label{letter-spacing:.16em;line-height:1.4}
+.closeness__track{position:relative;height:6px;border-radius:999px;background:linear-gradient(90deg,rgb(var(--fg-rgb) / .1),rgb(var(--generated-rgb) / .45))}
+.closeness__track.is-empty{background:none;border-top:1px dashed rgb(var(--fg-rgb) / .3);height:0;margin:3px 0}
+.closeness__dot{position:absolute;top:50%;left:calc(var(--at) * 100%);width:16px;height:16px;border-radius:50%;transform:translate(-50%,-50%);background:var(--generated);box-shadow:0 0 0 4px rgb(var(--generated-rgb) / .18),0 0 18px rgb(var(--generated-rgb) / .6)}
+.closeness__note{font-size:14px;line-height:1.45}
+.closeness__scale{display:flex;justify-content:space-between;font:11px/1 var(--mono);letter-spacing:.14em;color:var(--muted);text-transform:uppercase}
+.closeness__reading{display:flex;flex-direction:column;gap:6px;padding-top:12px;border-top:1px solid rgb(var(--fg-rgb) / .1)}
+.closeness__reading p:last-child{font:400 1.1rem/1.5 var(--serif)}
+.ending__note{font-size:14px;line-height:1.5;color:var(--muted);max-width:56ch}
+@media (max-width:620px){
+  .closing{grid-template-columns:minmax(0,1fr)}
+  .closing-image:not(.closing-image--small){flex-direction:row;align-items:center;gap:12px}
+  .closing-image:not(.closing-image--small) img,.closing-image:not(.closing-image--small) p{width:96px;flex:none}
+  .closing-image--words:not(.closing-image--small) p{width:auto;aspect-ratio:auto;padding:10px 12px;font-size:14px}
+  .closeness__markers{grid-template-columns:minmax(0,1fr);gap:16px}
+}
+
+/* ---------- how the system built a version of you: your answer → what it concluded ---------- */
+.pairs-head,.pair{display:grid;grid-template-columns:minmax(0,1fr) 36px minmax(0,1.15fr);gap:12px}
+.pairs-head{padding:0 16px;max-width:1080px}
+.pairs{display:flex;flex-direction:column;gap:10px;max-width:1080px}
+.pair{align-items:center;padding:14px 16px;border:1px solid rgb(var(--fg-rgb) / .1);border-radius:14px;background:rgb(var(--shade-rgb) / .5);backdrop-filter:blur(8px)}
+.pair__you,.pair__system{padding-left:12px;font-size:15px;line-height:1.5}
+.pair__you{border-left:2px solid rgb(var(--supplied-rgb) / .7);color:var(--fg)}
+.pair__system{border-left:2px solid rgb(var(--inferred-rgb) / .7)}
+.pair__arrow{justify-self:center;font-size:22px;line-height:1;color:var(--inferred)}
+.pair.is-contested .pair__system,.pair.is-rejected .pair__system{text-decoration:line-through;opacity:.6}
+.pairs-unknown{display:flex;flex-direction:column;gap:8px;max-width:1080px;padding:12px 16px;font-size:14.5px;line-height:1.5;color:var(--muted)}
+.pairs-unknown .tag{align-self:flex-start}
+.pairs-unknown ul{display:flex;flex-direction:column;gap:6px}
+@media (max-width:620px){
+  .pairs-head{display:none}
+  .pair{grid-template-columns:minmax(0,1fr);gap:6px}
+  .pair__arrow{justify-self:start;padding-left:12px;transform:rotate(90deg);font-size:18px}
+}

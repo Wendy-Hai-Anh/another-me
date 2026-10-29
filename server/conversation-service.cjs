@@ -377,6 +377,7 @@ async function commentary(input, options = {}) {
 const INFERENCE_PROMPT = compose({ speaker: SPEAKERS.SYSTEM, task: `Task: before the last stage, draw a short portrait of the participant from everything they actually contributed (participant_answers). Two parts:
 1. Internal working notes (never shown to them): observations (what they value or protect, what they avoid or find hard, how they communicate under pressure, how they negotiate disagreement, contexts that change their priorities, unresolved tensions, readings they corrected) and two optional organising lenses: MBTI-style preference dimensions and Holland/RIASEC interests. Lenses are aids for grouping observations, not an assessment. Use "unknown" or "insufficient_evidence" freely; a RIASEC interest needs evidence about activities or work they enjoy. Never equate conflict avoidance with introversion, responsibility with a type, or wanting a promotion with a Holland category.
 2. inferences: three to five short sentences for the participant, one thought each, roughly 8 to 20 words, in your voice: observant, intimate, concise, occasionally presumptuous. Let them develop naturally where the evidence allows: something they value or protect; something they avoid or hesitate to do; a tension between the two; then, if supported, a sharper reading of the cost, motive or boundary underneath. Relevance beats the order. Include at least one concrete connection to an actual choice, correction or pattern. Never generic flattering pairs ("you are kind but strong", "you care deeply but also need space"), never type labels, letters or scores, never a motive invented only to sound sharp. Prefer four sentences when the evidence supports it. If evidence is limited (brief, vague or contradictory answers), set evidence_limited to true and give one to three sentences, one of which MUST have role "limit" and say plainly that you have little to go on (e.g. "You've given me very little, so this is mostly guesswork."); the others stay modest.
+image_story (with image_context and story_followup) is what they said about an image they chose; image_observation, when given, is only what was visible in it (your own earlier description, never evidence about them). When image_story is present, exactly one sentence (role "image") connects what they said about the image to a choice they made in a later answer, naming the place or object from the image, e.g. "The desk you hide at when they argue and the money you'd hand over are the same move: keeping the peace quietly." It cites image_story and that later answer.
 Every substantive inference cites the participant answer ids it rests on and an honest evidence_strength (strong needs at least two separate answers). Readings they rejected (avoid_claims) must not return. AI predictions or the double's words are never evidence.
 ${RULES}` });
 const LEANS = { "E-I": ["E", "I"], "S-N": ["S", "N"], "T-F": ["T", "F"], "J-P": ["J", "P"] };
@@ -396,12 +397,12 @@ async function inferenceSequence(input, options = {}) {
         riasec: { type: "array", items: { type: "object", additionalProperties: false, required: ["category", "lean", "evidence_ids"], properties: { category: { type: "string", enum: ["R", "I", "A", "S", "E", "C"] }, lean: { type: "string", enum: ["possible", "unknown", "insufficient_evidence"] }, evidence_ids: idList } } } } },
       evidence_limited: { type: "boolean" },
       inferences: { type: "array", items: { type: "object", additionalProperties: false, required: ["claim", "role", "evidence_ids", "evidence_strength"], properties: {
-        claim: str(200), role: { type: "string", enum: ["values", "avoids", "tension", "underneath", "limit"] }, evidence_ids: idList, evidence_strength: { type: "string", enum: ["limited", "moderate", "strong"] } } } }
+        claim: str(200), role: { type: "string", enum: ["values", "avoids", "tension", "underneath", "image", "limit"] }, evidence_ids: idList, evidence_strength: { type: "string", enum: ["limited", "moderate", "strong"] } } } }
     }
   };
   const result = await createStructuredOutput({
     client: options.client, signal: options.signal, attemptMs: 25_000, deadline: Date.now() + 45_000,
-    instructions: INFERENCE_PROMPT, input: { participant_answers: input.answers, avoid_claims: checkClaims(input.avoid_claims) },
+    instructions: INFERENCE_PROMPT, input: { participant_answers: input.answers, image_observation: shortText(input.image_observation, 300, "image_observation"), avoid_claims: checkClaims(input.avoid_claims) },
     name: "inference_sequence", schema, maxOutputTokens: 1400, attempts: 3,
     // With limited evidence an over-long portrait is cut back to its "limit" sentence and the first two others.
     transform: data => {
@@ -415,6 +416,8 @@ async function inferenceSequence(input, options = {}) {
       const min = data.evidence_limited ? 1 : 3, max = data.evidence_limited ? 4 : 5;
       if (list.length < min || list.length > max) errors.push(`Give ${data.evidence_limited ? "one to four sentences when evidence is limited" : "three to five sentences"}.`);
       if (data.evidence_limited && !list.some(i => i.role === "limit")) errors.push("With limited evidence, one sentence (role limit) must say you have little to go on.");
+      // The image is carried to the end: one sentence ties their story about it to a later choice.
+      if (!data.evidence_limited && words(sources.get("image_story")) >= 6 && !list.some(i => i.role === "image" && i.evidence_ids.includes("image_story") && i.evidence_ids.some(id => !/^(image_story|image_context|story_followup)$/.test(id)))) errors.push('Include exactly one sentence with role "image" that connects what they said about their image to a later choice, citing image_story and that later answer.');
       list.forEach((item, n) => {
         const claim = item.claim.trim(), path = `inferences[${n}]`;
         if (!claim || words(claim) < 5 || words(claim) > 24 || (claim.match(/[.!?](\s|$)/g) || []).length > 2) errors.push(`${path} must be one short sentence of roughly 8 to 20 words.`);
@@ -434,4 +437,65 @@ async function inferenceSequence(input, options = {}) {
   return { evidence_limited: result.data.evidence_limited, inferences: result.data.inferences.map((item, n) => ({ id: `inference_${n + 1}`, claim: item.claim.trim(), role: item.role, evidenceRefs: item.evidence_ids, evidenceStrength: item.evidence_strength, status: "tentative" })) };
 }
 
-module.exports = { readImage, reply, synthesise, reviewReply, commentary, inferenceSequence, IMAGE_PROMPT, REPLY_PROMPT, SYNTHESIS_PROMPT, REVIEW_PROMPT, COMMENTARY_PROMPT, INFERENCE_PROMPT, SPEAKER: SPEAKERS.SYSTEM };
+/* ---------- the ending: the double answers first and introduces itself; the system says how close it came ---------- */
+// Two requests in one call, one per speaker: the double speaks as them, the interpreter speaks about their judgements.
+const CLOSING_DOUBLE_PROMPT = compose({ speaker: SPEAKERS.DOUBLE, task: `Task: the experience is ending. You are the participant's double and you speak first, before they answer.
+- answer: your own answer, as them, to "Does this still feel like you?" One or two short sentences (at most 35 words). Begin with your verdict (yes, partly, mostly, no or not sure), then name one concrete thing you would still do. If they corrected you anywhere (judgements with verdict corrected or rejected), take that correction on board in their terms, e.g. "Partly. I'd still hide at the desk when they argue, but I'd give in on the money, like you told me."
+- introduction: four or five short first-person lines (each at most 22 words) introducing yourself to them as their double. The first line begins exactly "I am you." Then, where the evidence allows: why the image they chose is you, from their own story about it, never a list of what is visible (e.g. "I chose my desk because it's where I go when they argue."; image_observation is only what was visible in it: use it to name the place or object, never a face, body or appearance); how you act in one situation they answered; how you act with family or under pressure; and, if they corrected you, one line that begins "You corrected me:" and states the correction in their own terms. With little evidence, use fewer, plainer lines rather than inventing.
+- evidence_ids: the participant_answers ids you drew on.
+participant_answers and judgements are the participant's own words and verdicts. ai_readings are earlier AI readings: context only, never evidence, and a reading they rejected must not return. Never invent events, people or history beyond their answers. You are a model built from a few answers, not the person: never claim to know them.
+${RULES}` });
+const CLOSING_READING_PROMPT = compose({ speaker: SPEAKERS.SYSTEM, task: `Task: the experience is ending. judgements records how the participant judged each version of them the system produced: the Stage 4 prediction, the Stage 5 reply written on their behalf and the Stage 6 scene. Write two short phrases:
+- came_close: completes "It came close on …" (at most 12 words), naming the specific area the versions got right, e.g. "how you handle credit at work". Base it only on what they accepted or marked as like them; an empty string if they accepted nothing.
+- missed: completes "It missed …" (at most 12 words), naming the specific area the versions got wrong, e.g. "how much you give way with family". Base it on their corrections, rejections and leaps; an empty string if they rejected nothing.
+Name areas of their life or behaviour in their terms, not stages or features of the system. No type labels, no scores.
+${RULES}` });
+const VERDICTS = ["accepted", "partly", "corrected", "rejected"];
+function checkJudgements(list) {
+  if (!Array.isArray(list) || list.length > 20 || list.some(j => !j || typeof j !== "object" || !["stage4", "stage5", "stage6"].includes(j.stage) || !VERDICTS.includes(j.verdict) || typeof j.text !== "string" || j.text.length > 600)) throw invalid("judgements is invalid.");
+  return list.map(j => ({ stage: j.stage, verdict: j.verdict, text: j.text }));
+}
+async function closing(input, options = {}) {
+  const sources = checkAnswers(input.answers);
+  const judgements = checkJudgements(input.judgements ?? []);
+  const readings = input.ai_readings === undefined ? [] : input.ai_readings;
+  if (!Array.isArray(readings) || readings.length > 6 || readings.some(r => typeof r !== "string" || r.length > 300)) throw invalid("ai_readings is invalid.");
+  const payload = { participant_answers: input.answers, judgements, image_observation: shortText(input.image_observation, 300, "image_observation"), ai_readings: readings, avoid_claims: checkClaims(input.avoid_claims) };
+  const corrected = judgements.some(j => ["corrected", "rejected"].includes(j.verdict) && j.text.trim());
+  const double = createStructuredOutput({
+    client: options.client, signal: options.signal, attemptMs: 20_000, deadline: Date.now() + 35_000, attempts: 3,
+    instructions: CLOSING_DOUBLE_PROMPT, input: payload, name: "closing_double", maxOutputTokens: 700,
+    schema: { type: "object", additionalProperties: false, required: ["answer", "introduction", "evidence_ids"], properties: { answer: str(260), introduction: { type: "array", items: str(200) }, evidence_ids: { type: "array", items: { type: "string", enum: [...sources.keys()] } } } },
+    validate: data => {
+      const lines = data.introduction.map(l => l.trim()), all = `${data.answer} ${lines.join(" ")}`, errors = [...textErrors(all, "closing")];
+      if (!data.answer.trim() || words(data.answer) > 40) errors.push("answer must be one or two short sentences, at most 35 words.");
+      if (lines.length < 2 || lines.length > 5) errors.push("introduction needs two to five lines (four or five when the evidence allows).");
+      if (!/^I am you\./.test(lines[0] || "")) errors.push('The first introduction line begins exactly "I am you."');
+      lines.forEach((l, n) => { if (!l || words(l) > 26) errors.push(`introduction[${n}] must be one short line of at most 22 words.`); });
+      if (!/\b(I|I'm|I’m|I'd|I’d|me|my)\b/.test(data.answer)) errors.push("answer is spoken as them, in first person.");
+      if (appearance.test(all)) errors.push("Do not describe faces, bodies or appearance.");
+      if (corrected && !lines.some(l => /^You corrected me\b/.test(l))) errors.push('They corrected you: include one line beginning "You corrected me:" in their terms.');
+      if (!data.evidence_ids.length) errors.push("Cite the answers you drew on in evidence_ids.");
+      return errors;
+    }
+  });
+  const reading = judgements.length ? createStructuredOutput({
+    client: options.client, signal: options.signal, attemptMs: 15_000, deadline: Date.now() + 30_000, attempts: 2,
+    instructions: CLOSING_READING_PROMPT, input: { judgements, participant_answers: input.answers, avoid_claims: payload.avoid_claims }, name: "closing_reading", maxOutputTokens: 300,
+    schema: { type: "object", additionalProperties: false, required: ["came_close", "missed"], properties: { came_close: str(120), missed: str(120) } },
+    validate: data => {
+      const errors = [...textErrors(`${data.came_close} ${data.missed}`, "reading")];
+      if (words(data.came_close) > 14 || words(data.missed) > 14) errors.push("Each phrase is at most 12 words.");
+      if (!data.came_close.trim() && !data.missed.trim()) errors.push("Name at least one area, from what they accepted or corrected.");
+      return errors;
+    }
+  }) : Promise.resolve(null);
+  const [d, r] = await Promise.allSettled([double, reading]);
+  if (d.status === "rejected" && (r.status === "rejected" || !r.value)) throw d.reason;
+  return {
+    double: d.status === "fulfilled" ? { answer: d.value.data.answer.trim(), introduction: d.value.data.introduction.map(l => l.trim()), evidence_ids: d.value.data.evidence_ids } : null,
+    reading: r.status === "fulfilled" && r.value ? { came_close: r.value.data.came_close.trim().replace(/[.!]+$/, ""), missed: r.value.data.missed.trim().replace(/[.!]+$/, "") } : null
+  };
+}
+
+module.exports = { readImage, reply, synthesise, reviewReply, commentary, inferenceSequence, closing, IMAGE_PROMPT, REPLY_PROMPT, SYNTHESIS_PROMPT, REVIEW_PROMPT, COMMENTARY_PROMPT, INFERENCE_PROMPT, CLOSING_DOUBLE_PROMPT, CLOSING_READING_PROMPT, SPEAKER: SPEAKERS.SYSTEM };
