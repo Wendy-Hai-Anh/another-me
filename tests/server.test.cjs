@@ -51,3 +51,17 @@ test("server serves only integration assets and keeps secrets inaccessible", asy
     assert.equal(avatar.status, 503);
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
+
+test("a profile that cites its own supplied_information ids is translated to the answer ids, not rejected", () => {
+  const { sanitizeIdentityProfile, validateIdentityProfile } = require("../server/schemas.cjs");
+  const answers = [{ id: "question_1", question: "Q1", answer: "I'd stay quiet." }, { id: "question_2", question: "Q2", answer: "I'd go to the wedding." }];
+  const profile = {
+    supplied_information: [{ id: "supplied_1", statement: "I'd stay quiet.", source_answer_id: "question_1" }, { id: "supplied_2", statement: "I'd go to the wedding.", source_answer_id: "question_2" }],
+    inferred_information: [{ id: "inference_1", statement: "You may avoid scenes.", evidence_ids: ["supplied_1", "question_1", "supplied_2"] }],
+    generated_assumptions: [], contradictions: [], unknowns: [], profile_summary: "x"
+  };
+  const { data, adjustments } = sanitizeIdentityProfile(profile, answers);
+  assert.deepEqual(data.inferred_information[0].evidence_ids, ["question_1", "question_2"]);
+  assert.equal(adjustments.length, 1);
+  assert.ok(!validateIdentityProfile(data, answers).some(e => /unknown answer ID/.test(e)));
+});

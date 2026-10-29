@@ -105,7 +105,7 @@ async function generate(kind, answers, question, context = {}) {
       result.invented_detail?.trim() && "invented detail", !/\b(I|I'm|I'd|I'll|I've|me|my)\b/i.test(result.text || "") && "not first person",
       (result.text || "").split(/\s+/).length > 80 && "too long"].filter(Boolean);
     // A Stage 4 correction should visibly reach the double; a missing or stray note is retried, never fatal.
-    const correction = kind === "proxy" && answers.some(a => a.id === "stage4_correction" && !/^(?:The double|My AI self) got both my decision and my reason right\.$/.test(a.answer.trim()));
+    const correction = kind === "proxy" && answers.some(a => a.id === "stage4_correction" && !/^(?:The double|My AI [Ss]elf) got both my decision and my reason right\.$/.test(a.answer.trim()));
     const note = String(result.correction_applied || "").trim();
     const noteMiss = kind === "proxy" && (correction ? !/^You (told|said)\b/.test(note) || note.split(/\s+/).length > 36 : !!note);
     if (noteMiss && attempt < attempts && !problems.length) continue;
@@ -121,7 +121,7 @@ async function generate(kind, answers, question, context = {}) {
 function validateProxyScript(result) {
   let cleaned;
   try { cleaned = proxyText.forSpeech(result.text); }
-  catch { throw Object.assign(new Error("The proxy script contains narration of source references."), { statusCode: 502, publicMessage: "The double included source notes in its script. Please retry; no voice has been generated." }); }
+  catch { throw Object.assign(new Error("The proxy script contains narration of source references."), { statusCode: 502, publicMessage: "Your AI Self included source notes in its script. Please retry; no voice has been generated." }); }
   return { ...result, text: cleaned };
 }
 module.exports = { audioNames, createIdentityProfile, createPrediction, generate, transcribe, validateFictionResult, validateProxyScript };

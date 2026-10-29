@@ -259,6 +259,11 @@ async function createPrediction({ answers, profile, targetQuestion }) {
         errors.push("$.target_question must copy the requested target question exactly.");
       }
       if (prediction.predicted_response) errors.push(...doubleStyleErrors(prediction.predicted_response, demonstratedStyle(answers)));
+      // Someone who told us they avoid conflict at home does not flatly refuse their family without any give.
+      const avoidsFamilyConflict = /\b(avoid|escape|hide|stay out|get away)\b[^.]{0,60}\b(family|parents|mum|mom|dad|home)\b|\b(family|parents|mum|mom|dad)\b[^.]{0,40}\b(argu|fight|yell|shout)/i.test(answers.map(a => a.answer).join(" "));
+      // "Maybe later" does not count as giving ground; an offer made tonight does.
+      const flatRefusal = /\b(no|can['’]t|cannot|won['’]t|not giving)\b/i.test(prediction.predicted_response || "") && !/\b(I['’]ll|I will|I can|I could|let me|I['’]d)\s+(probably\s+)?(give|lend|put in|transfer|send|hand over|offer|cover|pay)\b/i.test(prediction.predicted_response || "");
+      if (/family|parents/i.test(targetQuestion) && avoidsFamilyConflict && flatRefusal) errors.push("$.predicted_response is a flat refusal, but their own words show them avoiding conflict with family. Let the decision give some ground, delay, or hold only a weak, conditional boundary.");
       // The interface introduces it with "I think you would tell them:", so it must be the words themselves.
       if (/what would you say/i.test(targetQuestion) && /^\s*I(?:'d|’d| would)\s+(?:(?:probably|just|maybe|honestly|likely)\s+)?(?:say|tell|reply|respond|answer)\b/i.test(prediction.predicted_response || "")) {
         errors.push("$.predicted_response must be the words spoken to the other person, not a description such as \"I'd tell them\". Write only the words themselves.");

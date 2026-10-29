@@ -12,7 +12,7 @@ const SHARED_RULES = `Shared rules:
 - Keep provenance separate: participant statements are evidence about them; their corrections override earlier AI readings; AI predictions and anything the double has said are AI output and never evidence of what they said or believe. Carrying on without objecting is not confirmation.
 - Never invent personal history, private facts, relationships, trauma or diagnoses. Never infer health, mental-state labels, appearance, age, sexuality, ethnicity, religion or politics.
 - Never use percentages, numeric confidence or personality-type labels (such as MBTI letters or Holland codes) in anything the participant will read.
-- In anything the participant will read, the version of them that speaks in first person is "your AI self", and what reads and predicts them is "the system". Never call either a "double" or a "model". Input ids and field names may still say double; that wording is internal.`;
+- In anything the participant will read, the version of them that speaks in first person is "Your AI Self", and what reads and predicts them is "the system". Never call either a "double" or a "model". Input ids and field names may still say double; that wording is internal.`;
 
 // System interpreter: provocative, perceptive, occasionally bossy. Confidence is a performance of
 // interpretation, never a claim to stronger evidence.

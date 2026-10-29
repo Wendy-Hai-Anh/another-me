@@ -283,6 +283,20 @@ function sanitizeIdentityProfile(profile, answers) {
   }
 
   const adjustments = [];
+  // The model sometimes cites its own supplied_information ids ("supplied_3") instead of the answer ids they copy.
+  // Each one names exactly one answer, so it is translated rather than rejected; anything else stays as written.
+  const answerFor = new Map((Array.isArray(profile.supplied_information) ? profile.supplied_information : [])
+    .filter((item) => item && typeof item.id === "string" && answers.some((answer) => answer.id === item.source_answer_id))
+    .map((item) => [item.id, item.source_answer_id]));
+  const translate = (ids) => Array.isArray(ids) ? [...new Set(ids.map((id) => answerFor.get(id) || id))] : ids;
+  let translated = false;
+  const remap = (list, key) => Array.isArray(list) ? list.map((item) => {
+    if (!item || !Array.isArray(item[key]) || !item[key].some((id) => answerFor.has(id))) return item;
+    translated = true;
+    return { ...item, [key]: translate(item[key]) };
+  }) : list;
+  profile = { ...profile, inferred_information: remap(profile.inferred_information, "evidence_ids"), generated_assumptions: remap(profile.generated_assumptions, "related_evidence_ids"), contradictions: remap(profile.contradictions, "evidence_ids") };
+  if (translated) adjustments.push("Translated citations of supplied_information ids into the answer ids they copy.");
   const citesSensitiveAnswer = (ids) => Array.isArray(ids) && ids.some((id) => sensitiveAnswerIds.has(id));
   const includesSensitiveExpansion = (item) => SENSITIVE_CONTENT.test(Object.values(item).filter((value) => typeof value === "string").join(" "));
   const originalInferences = Array.isArray(profile.inferred_information) ? profile.inferred_information : [];

@@ -42,7 +42,7 @@ const operationDefinitions = {
   proxy: { label: "On-behalf response", stages: [5], timeoutMs: 60_000, loading: "Generating a response on your behalf…", success: "On-behalf response ready. Review it before continuing.", fallback: "Live response generation is unavailable. You can use clearly labelled mock text or skip this step." },
   fiction: { label: "Fictional generation", stages: [6], timeoutMs: 150_000, loading: "Generating clearly fictional content…", success: "Fictional content ready. Review its disclosure before continuing.", fallback: "Live fictional generation is unavailable. You can use clearly labelled mock fiction or finish without it." },
   elevenlabs: { label: "Voice response", stages: [5], timeoutMs: 180_000, loading: "Creating the voice response…", success: "Temporary cloned voice ready.", fallback: "Voice cloning is unavailable. The generated text remains available, with optional browser speech if you allow it." },
-  did: { label: "AI self animation", stages: [5], timeoutMs: 480_000, loading: "Animating your AI self… D-ID may remain queued for several minutes before rendering.", success: "Talking portrait ready.", fallback: "Animation is unavailable. The still portrait and completed audio remain available; if audio is unavailable, the experience uses portrait and text." }
+  did: { label: "AI Self animation", stages: [5], timeoutMs: 480_000, loading: "Animating your AI Self… D-ID may remain queued for several minutes before rendering.", success: "Talking portrait ready.", fallback: "Animation is unavailable. The still portrait and completed audio remain available; if audio is unavailable, the experience uses portrait and text." }
 };
 const operationStateNames = new Set(["idle", "loading", "success", "timeout", "error", "fallback"]);
 const query = new URLSearchParams(location.search);
@@ -595,13 +595,13 @@ function renderProxy() {
   if (item && sessionState.ui.proxyReview) return `${source("proxy", sessionState.generated.proxyMode === "mock" ? "SIMULATED" : "")}<div class="double-review"><p class="scene-line">Would you have said this?</p><blockquote class="review-quote">${escapeHtml(item.text)}</blockquote><p class="small">This is an AI interpretation, not your real answer.</p>
     ${item.feedback ? `<p class="review-note">You ${escapeHtml(item.feedback)} this response${item.correction ? ` and said: “${escapeHtml(item.correction)}”` : ""}.</p>` : ""}
     ${sessionState.ui.correctingProxy ? `<label for="proxyCorrection">What would you say instead?</label><textarea id="proxyCorrection" rows="3"></textarea>${buttons([["save-proxy-correction", "Keep my correction", "primary"], ["cancel-proxy-correction", "Cancel"]])}` : buttons([["review-proxy", "Accept"], ["correct-proxy", "Correct"], ["reject-proxy", "Reject"], ["delete-proxy", "Delete this response", "danger"]])}
-    ${buttons([["review-proxy-back", "See your AI self again"]])}</div>`;
-  if (item && sessionState.ui.mediaOptionsOpen) return `${spokenPrompt("proxy-question", proxyQuestion)}<p class="scene-line">Give your AI self a voice or a portrait</p>${renderMediaSetup(image, voiceSample)}${buttons([["generate-proxy-media", media.audio ? "Try animation again" : "Create cloned voice and animation", "primary", busy || !sessionState.consent.voiceCloning || !voiceSample], ["toggle-media-options", "Back to response"]])}`;
+    ${buttons([["review-proxy-back", "See your AI Self again"]])}</div>`;
+  if (item && sessionState.ui.mediaOptionsOpen) return `${spokenPrompt("proxy-question", proxyQuestion)}<p class="scene-line">Give your AI Self a voice or a portrait</p>${renderMediaSetup(image, voiceSample)}${buttons([["generate-proxy-media", media.audio ? "Try animation again" : "Create cloned voice and animation", "primary", busy || !sessionState.consent.voiceCloning || !voiceSample], ["toggle-media-options", "Back to response"]])}`;
   return `${spokenPrompt("proxy-question", proxyQuestion)}
     ${!sessionState.consent.proxyResponse ? `<p class="consent-line">The system can answer this question as if it were you. You do not answer first. This requires your permission.</p>${buttons([["allow-proxy", "Allow a text response", "primary"]])}` : ""}
-    ${sessionState.consent.proxyResponse && !item ? `<div class="proxy-setup"><p class="scene-line">How should your AI self appear?</p>
+    ${sessionState.consent.proxyResponse && !item ? `<div class="proxy-setup"><p class="scene-line">How should your AI Self appear?</p>
       <details class="quiet-details" ${sessionState.ui.mediaOptionsOpen ? "open" : ""}><summary data-action="toggle-media-options">Optional voice and portrait setup</summary>${renderMediaSetup(image, voiceSample)}</details>
-      ${buttons([["generate-proxy", "Let your AI self answer", "primary", busy], ["mock-proxy", "Use simulated answer"]])}</div>` : ""}
+      ${buttons([["generate-proxy", "Let your AI Self answer", "primary", busy], ["mock-proxy", "Use simulated answer"]])}</div>` : ""}
     ${item ? `<div class="double-scene"><div class="participant-side"><p class="machine-intro">YOU SHARED</p>${sessionState.supplied.image ? `<img src="${sessionState.supplied.image.url}" alt="Your chosen image">` : `<p class="no-image">No image supplied</p>`}</div>
       <article class="double-side">${source("proxy", sessionState.generated.proxyMode === "mock" ? "SIMULATED" : "")}
         ${media.video ? `<video controls playsinline preload="metadata" src="${media.video.url}"></video>` : image ? `<img src="${image.url}" alt="Still portrait of the participant; no animation was generated">` : ""}
@@ -1261,20 +1261,20 @@ function renderData() {
   if (sessionState.supplied.image) supplied.push(dataItem("Image", sessionState.supplied.image.origin, "image", `<img class="media" src="${sessionState.supplied.image.url}" alt="Your supplied image">`));
   if (sessionState.supplied.portrait) supplied.push(dataItem("Captured portrait", sessionState.supplied.portrait.origin, "portrait", `<img class="media" src="${sessionState.supplied.portrait.url}" alt="Your captured portrait">`));
   if (sessionState.supplied.audio) supplied.push(dataItem("Voice recording", sessionState.supplied.audio.type, "audio", `<audio controls src="${sessionState.supplied.audio.url}"></audio>`));
-  if (sessionState.supplied.transcript.trim()) supplied.push(dataItem("Transcript / written image story", sessionState.supplied.transcript, "transcript"));
+  if (sessionState.supplied.transcript.trim()) supplied.push(dataItem("Your story about the image", sessionState.supplied.transcript, "transcript"));
   sessionState.supplied.answers.forEach((answer,index) => {
-    if (answer.text.trim()) supplied.push(dataItem(`Question ${index + 1} answer`, answer.text, `answer:${index}`));
-    if (answer.audio) supplied.push(dataItem(`Question ${index + 1} voice answer`, answer.audio.type, `answer-audio:${index}`, `<audio controls src="${answer.audio.url}"></audio>`));
+    if (answer.text.trim()) supplied.push(dataItem(`Your answer to situation ${index + 1}`, answer.text, `answer:${index}`));
+    if (answer.audio) supplied.push(dataItem(`Your spoken answer to situation ${index + 1}`, answer.audio.type, `answer-audio:${index}`, `<audio controls src="${answer.audio.url}"></audio>`));
   });
-  if (sessionState.predicted.participantAnswers[0]?.text) supplied.push(dataItem("Your actual prediction answer", sessionState.predicted.participantAnswers[0].text, "actual-answer"));
-  if (sessionState.predicted.participantAnswers[0]?.audio) supplied.push(dataItem("Your spoken prediction answer", sessionState.predicted.participantAnswers[0].audio.type, "prediction-audio", `<audio controls src="${sessionState.predicted.participantAnswers[0].audio.url}"></audio>`));
-  if (sessionState.predicted.comparisons[0]?.rating) supplied.push(dataItem("Your prediction rating", sessionState.predicted.comparisons[0].rating, "comparison"));
-  sessionState.inferred.participantFeedback.forEach(item => supplied.push(dataItem(`Your review of ${item.id}`, `${item.verdict}${item.correction ? `: ${item.correction}` : ""}`, `inference-review:${item.id}`)));
-  sessionState.inferred.contradictionFeedback.forEach(item => supplied.push(dataItem(`Your contradiction review ${item.id}`, `${item.verdict}${item.explanation ? `: ${item.explanation}` : ""}`, `contradiction-review:${item.id}`)));
-  const inferred = sessionState.inferred.profile?.inferred_information.map(item => dataItem("AI inference", item.statement, `inference:${item.id}`)) || [];
+  if (sessionState.predicted.participantAnswers[0]?.text) supplied.push(dataItem("Your answer to the family dilemma", sessionState.predicted.participantAnswers[0].text, "actual-answer"));
+  if (sessionState.predicted.participantAnswers[0]?.audio) supplied.push(dataItem("Your spoken answer to the family dilemma", sessionState.predicted.participantAnswers[0].audio.type, "prediction-audio", `<audio controls src="${sessionState.predicted.participantAnswers[0].audio.url}"></audio>`));
+  if (sessionState.predicted.comparisons[0]?.rating) supplied.push(dataItem("How you rated the prediction", sessionState.predicted.comparisons[0].rating, "comparison"));
+  sessionState.inferred.participantFeedback.forEach(item => supplied.push(dataItem("Your review of a system conclusion", `${item.verdict}${item.correction ? `: ${item.correction}` : ""}`, `inference-review:${item.id}`)));
+  sessionState.inferred.contradictionFeedback.forEach(item => supplied.push(dataItem("Your answer about a possible contradiction", `${item.verdict}${item.explanation ? `: ${item.explanation}` : ""}`, `contradiction-review:${item.id}`)));
+  const inferred = sessionState.inferred.profile?.inferred_information.map(item => dataItem("System conclusion", item.statement, `inference:${item.id}`)) || [];
   const predicted = sessionState.predicted.predictions.map((item,index) => dataItem("AI prediction", item.predicted_response || "Insufficient evidence", `prediction:${index}`));
   const generated = [
-    ...sessionState.generated.proxyResponses.map((item,index) => dataItem("Proxy response", item.text, `proxy:${index}`)),
+    ...sessionState.generated.proxyResponses.map((item,index) => dataItem("Your AI Self's reply", item.text, `proxy:${index}`)),
     ...(sessionState.generated.proxyMedia.audio ? [dataItem("Temporary cloned speech", "ElevenLabs-generated MP3 held in browser memory", "proxy-media", `<audio controls src="${sessionState.generated.proxyMedia.audio.url}"></audio>`)] : []),
     ...(sessionState.generated.proxyMedia.video ? [dataItem("Temporary talking portrait", "D-ID-generated MP4 held in browser memory", "proxy-media", `<video class="media" controls playsinline src="${sessionState.generated.proxyMedia.video.url}"></video>`)] : []),
     ...sessionState.generated.fictionalContent.map((item,index) => dataItem("Fictional content", item.fictional_memory, `fiction:${index}`))

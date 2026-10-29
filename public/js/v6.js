@@ -35,9 +35,9 @@
     reply: { label: "Response", stages: [2, 3], timeoutMs: 18000, loading: "Thinking about your answer…", success: "", fallback: "" },
     synthesis: { label: "Reading your answers together", stages: [3], timeoutMs: 35000, loading: "Reading your answers together…", success: "", fallback: "" },
     review: { label: "Your explanation", stages: [3], timeoutMs: 18000, loading: "Thinking about your explanation…", success: "", fallback: "" },
-    commentary: { label: "Another Me's reading", stages: [4, 6], timeoutMs: 18000, loading: "Reading your AI self's answer…", success: "", fallback: "" },
+    commentary: { label: "Another Me's reading", stages: [4, 6], timeoutMs: 18000, loading: "Reading your AI Self's answer…", success: "", fallback: "" },
     inference: { label: "Another Me's reading", stages: [6], timeoutMs: 40000, loading: "Putting the reading together…", success: "", fallback: "" },
-    closing: { label: "Your AI self's last words", stages: [6], timeoutMs: 40000, loading: "Your AI self is answering…", success: "", fallback: "" },
+    closing: { label: "Your AI Self's last words", stages: [6], timeoutMs: 40000, loading: "Your AI Self is answering…", success: "", fallback: "" },
     feedback: { label: "Feedback", stages: [], timeoutMs: 15000, loading: "Sending your feedback…", success: "", fallback: "" }
   });
   operationDefinitions.fiction = { label: "Fictional scene", stages: [6], timeoutMs: 90000, loading: "Writing a fictional scene…", success: "Your fictional scene is ready.", fallback: "" };
@@ -47,11 +47,11 @@
   operationDefinitions.prediction.timeoutMs = 45000;
   operationDefinitions.prediction.loading = "Preparing a prediction…";
   operationDefinitions.proxy.timeoutMs = 35000;
-  operationDefinitions.proxy.loading = "Writing your AI self's reply…";
+  operationDefinitions.proxy.loading = "Writing your AI Self's reply…";
   operationDefinitions.elevenlabs.timeoutMs = 75000;
-  operationDefinitions.elevenlabs.loading = "Creating your AI self's voice…";
+  operationDefinitions.elevenlabs.loading = "Creating your AI Self's voice…";
   operationDefinitions.did.timeoutMs = 300000;
-  operationDefinitions.did.loading = "Animating your AI self…";
+  operationDefinitions.did.loading = "Animating your AI Self…";
   operationDefinitions.transcription.timeoutMs = 35000;
   stages[2][2] = "Three situations, one at a time.";
   stages[5][2] = "A situation you never described.";
@@ -157,16 +157,16 @@
     transcription: ["Turning your recording into words", "Kept your recording and left the words for you to type."],
     identity: ["Building the system's version of you", "Kept your answers and any earlier version."],
     prediction: ["Preparing a prediction", "Kept your answers and moved on without a prediction. Your own answer is never used to make one."],
-    proxy: ["Writing your AI self's reply", "Tried once more in the background, then moved on without a reply."],
-    elevenlabs: ["Creating your AI self's voice", "Kept the written reply. Nothing was spoken in a voice that isn't labelled."],
-    did: ["Animating your AI self", "Kept your cloned voice and a still portrait."],
+    proxy: ["Writing your AI Self's reply", "Tried once more in the background, then moved on without a reply."],
+    elevenlabs: ["Creating your AI Self's voice", "Kept the written reply. Nothing was spoken in a voice that isn't labelled."],
+    did: ["Animating your AI Self", "Kept your cloned voice and a still portrait."],
     fiction: ["Writing a fictional scene", "Showed a prepared demonstration scene instead. It does not come from an AI reading of your answers."],
     image: ["Looking at your image", "Kept your image. I'll go by what you tell me about it, and nothing about it was guessed."],
     reply: ["Responding to your answer", "Kept your answer exactly as you wrote it and moved on."],
     synthesis: ["Reading your answers together", "Kept your answers and continued without an interpretation."],
     review: ["Responding to your explanation", "Kept your explanation exactly as you wrote it; it still updates the system's version of you."],
     feedback: ["Sending your feedback", "Kept everything you chose in the form. Nothing was reported as sent."],
-    closing: ["Your AI self's last words", "You answered on your own, and the ending shows your own judgements without your AI self's introduction."]
+    closing: ["Your AI Self's last words", "You answered on your own, and the ending shows your own judgements without your AI Self's introduction."]
   };
   // Where / what happened / what the system did / what can help. Technical failures and missing information are
   // told apart. No keys, request contents or stack traces are ever shown.
@@ -254,12 +254,20 @@
   const workspace = (voice, words, cls = "") => `<div class="workspace ${cls}">${voice}${words}</div>`;
 
   /* ---------- opening ---------- */
-  window.renderOpening = () => screen("opening", `<div class="opening">
+  // The whole journey on one line before it starts: each stage builds on the one before.
+  const ROADMAP = ["It looks at an image you choose", "You tell it what the image hides", "It reads three choices you make", "It answers for you, before you do", "Your AI Self replies as you", "You decide if it is still you"];
+  // After Enter, a page of its own shows the whole journey before Stage 1 begins.
+  const journeyScreen = () => screen("opening", `<div class="opening journey"><p class="opening__kicker">BEFORE YOU BEGIN</p>
+    <h2 class="opening__title journey__title">Six stages. Each one goes a little deeper.</h2>
+    <ol class="roadmap" aria-label="The six stages">${ROADMAP.map((step, i) => `<li><span class="roadmap__num">${pad(i + 1)}</span><span class="roadmap__name">${esc(stages[i][0])}</span><span class="roadmap__what">${step}</span></li>`).join("")}</ol>
+    <p class="opening__note">About 10–15 minutes. You can skip, go back or stop at any point.</p>
+    ${row(act("start-journey", "Begin", "btn-primary btn-large"))}${row(act("journey-back", "Back", "btn-tertiary"))}</div>`);
+  window.renderOpening = () => ui().journey ? journeyScreen() : screen("opening", `<div class="opening">
     <p class="opening__kicker">AN EXPERIMENT IN BEING SEEN</p>
     <h2 class="opening__title opening__title--split"><span>How much of you</span> <span>can a system make?</span></h2>
     <p class="opening__lede">Give it an image, your voice and a few answers. It will talk with you, form an interpretation of you, and then speak as you.</p>
-    <p class="opening__note">What the system builds is a version of you, not you. You can correct it, reject it or delete everything at any time.</p>
-    ${appConfig.serverless ? '<p class="opening__note">Online demonstration: the AI text is simulated and nothing you enter leaves this browser. The full version with live AI, voice and the talking AI self runs with the project server.</p>' : ""}
+    <p class="opening__note">Whatever it builds is a guess at you, not you. You can correct it, reject it or delete everything at any time.</p>
+    ${appConfig.serverless ? '<p class="opening__note">Online demonstration: the AI text is simulated and nothing you enter leaves this browser. The full version with live AI, voice and the talking AI Self runs with the project server.</p>' : ""}
     ${!mockMode && capabilities?.accessCode !== false ? `<div class="field access-field"><label for="accessCode">Access code for the live AI (from the researcher)</label><input id="accessCode" type="password" autocomplete="off" value="${esc(storedAccessCode())}" aria-describedby="accessStatus"><p id="accessStatus" class="hint" role="status">${esc(accessMessage || "Your code is checked when you enter. This is not your API key.")}</p></div>` : ""}
     ${row(act("begin", "Enter", "btn-primary btn-large"))}
     <div class="opening__more"><details><summary>What happens to my information?</summary><p>Your session lives only in this browser's memory, not a database. What you supply, what the AI infers and what it generates are always labelled separately. External AI services (OpenAI, ElevenLabs, D-ID) are used only after you allow each one, and their own retention policies apply.</p></details>
@@ -430,14 +438,14 @@
     const actual = s.predicted.participantAnswers[0]?.text?.trim(), comparison = s.predicted.comparisons[0];
     if (actual) answers.push({ id: "stage4_answer", question: dilemma, answer: actual });
     if (comparison?.rating || comparison?.explanation?.trim()) {
-      const said = [comparison.rating ? `My AI self got ${({ Both: "both my decision and my reason", "Decision only": "my decision but not my reason", "Reason only": "my reason but not my decision", Neither: "neither my decision nor my reason" })[comparison.rating]} right.` : "", comparison.explanation?.trim() || ""].filter(Boolean).join(" ");
-      answers.push({ id: "stage4_correction", question: "How my AI self's answer to the family dilemma compared with mine", answer: said });
+      const said = [comparison.rating ? `My AI Self got ${({ Both: "both my decision and my reason", "Decision only": "my decision but not my reason", "Reason only": "my reason but not my decision", Neither: "neither my decision nor my reason" })[comparison.rating]} right.` : "", comparison.explanation?.trim() || ""].filter(Boolean).join(" ");
+      answers.push({ id: "stage4_correction", question: "How my AI Self's answer to the family dilemma compared with mine", answer: said });
     }
     // Stage 5: their correction of the double's reply, and lines they said they would never say.
     const proxy = s.generated.proxyResponses[0];
     if (proxy?.feedback === "corrected" && proxy.correction?.trim()) answers.push({ id: "stage5_correction", question: `How I would actually reply to: "${proxyMessage}"`, answer: proxy.correction.trim() });
     const never = (proxy?.sentences || []).filter(x => x.mark === "never").map(x => x.text);
-    if (never.length) answers.push({ id: "stage5_never", question: "Lines from my AI self's reply that I would never say", answer: never.map(t => `"${t}"`).join(" ") });
+    if (never.length) answers.push({ id: "stage5_never", question: "Lines from my AI Self's reply that I would never say", answer: never.map(t => `"${t}"`).join(" ") });
     uncertaintyReplies().filter(r => r.verdict !== "private" && r.explanation?.trim()).slice(0, 2).forEach((r, i) => {
       answers.push({ id: `uncertainty_${i + 1}`, question: `The system was unsure: ${r.text}`, answer: r.explanation.trim() });
     });
@@ -613,7 +621,7 @@
       frame = `<div class="image-drop"><span class="image-drop__ring" aria-hidden="true"></span>${phoneAvailable() ? row(act("phone-start", "Send a photo from your phone"), baseAct("enable-camera", "Use camera"), file) : row(file, baseAct("enable-camera", "Use camera"))}${row(act("describe-image", "Describe an image instead", "btn-tertiary"))}<p class="hint">${phoneAvailable() ? "Scan a code with your phone to send one of your own photos. " : ""}The camera starts only if you choose it.</p></div>`;
     }
     return screen("image", `<div class="split split--image"><div>${head(imagePrompt, { promptKey: "image-prompt", context: `${imageContext} I'll describe what I can see in it, never faces or appearance.` })}
-      <details class="evidence" data-keep="what-is-this"><summary>What is this experience?</summary><div class="evidence-body"><p>Over six stages, a system talks with you, turns what you share into an interpretation of you, then a prediction, then an AI self that speaks as you. Every step is an AI reading of limited information, not an objective version of you.</p></div></details></div>
+      <details class="evidence" data-keep="what-is-this"><summary>What is this experience?</summary><div class="evidence-body"><p>Over six stages, a system talks with you, turns what you share into an interpretation of you, then a prediction, then an AI Self that speaks as you. Every step is an AI reading of limited information, not an objective version of you.</p></div></details></div>
       <div class="image-col">${frame}${deviceNotice("camera")}</div></div>`);
   };
 
@@ -955,7 +963,7 @@
   }
   function commentaryBlock(entry) {
     if (!entry || entry.status === "none") return "";
-    return `<section class="voice-block voice-block--system" aria-label="Another Me">${voiceLabel("system_interpreter")}${entry.status === "loading" ? thinking("Another Me is reading your AI self's answer") : `<p class="claim">${esc(entry.text)}</p>`}</section>`;
+    return `<section class="voice-block voice-block--system" aria-label="Another Me">${voiceLabel("system_interpreter")}${entry.status === "loading" ? thinking("Another Me is reading your AI Self's answer") : `<p class="claim">${esc(entry.text)}</p>`}</section>`;
   }
   function situationScreen() {
     const s = sessionState, p = ui().s4Pred, prediction = s.predicted.predictions[0], answered = !!s.predicted.participantAnswers[0]?.text?.trim();
@@ -963,7 +971,7 @@
     if (!p || p.status === "preparing") model = progress("Preparing a prediction", p?.startedAt || Date.now());
     else if (p.status === "ready" && prediction?.predicted_response) {
       const comment = commentaryFor("stage4", dilemma, prediction.predicted_response);
-      model = `<section class="prediction voice-block voice-block--double" aria-label="Your AI self">${voiceLabel("participant_double")}<div class="tag-row">${tag("predicted", "AI PREDICTION · NOT SOMETHING YOU SAID")}${s.predicted.mode === "mock" ? tag("demo") : ""}</div><p class="double-speech">${esc(unquote(prediction.predicted_response))}</p><p class="confidence">${esc(prediction.confidence_label)} confidence · a label, not a measurement</p>${predictionWhy(prediction)}</section>${commentaryBlock(comment)}`;
+      model = `<section class="prediction voice-block voice-block--double" aria-label="Your AI Self">${voiceLabel("participant_double")}<div class="tag-row">${tag("predicted", "AI PREDICTION · NOT SOMETHING YOU SAID")}${s.predicted.mode === "mock" ? tag("demo") : ""}</div><p class="double-speech">${esc(unquote(prediction.predicted_response))}</p><p class="confidence">${esc(prediction.confidence_label)} confidence · a label, not a measurement</p>${predictionWhy(prediction)}</section>${commentaryBlock(comment)}`;
     }
     else if (p.status === "skipped") model = calm("You chose to answer without waiting, so there is no prediction for this situation.");
     else if (p.status === "insufficient") model = `${calm("I don't have enough from your answers to predict this one, so I'll just ask you.")}${whatHappened("prediction", { insufficient: true, where: WHERE.prediction[0], what: `Not enough information. ${prediction?.uncertainty_statement || "Your answers don't say enough about situations like this one."}`, did: "Asked you directly instead of guessing.", help: "Nothing is needed from you. This is not a technical problem." })}`;
@@ -973,8 +981,15 @@
         : p.reason === "profile" ? technical("identity", { did: "Kept your answers; without the system's version of you there was nothing to predict from.", actions: retry }) : technical("prediction", { actions: retry });
       model = `${calm("I couldn't prepare a prediction this time, so I'll just ask you.")}${panel}`;
     }
-    return screen("predict", `${head("Your family wants your savings, tonight.", { promptKey: "prediction-dilemma", meta: "A hypothetical situation" })}<p class="scenario">${esc(dilemma)}</p><p class="hint">Your AI self answers first. Then you.</p>${model}`);
+    return screen("predict", `${head("Your family wants your savings, tonight.", { promptKey: "prediction-dilemma", meta: "A hypothetical situation" })}<p class="scenario">${esc(dilemma)}</p><p class="hint">Your AI Self answers first. Then you.</p>${model}`);
   }
+  // Another Me answers the rating at once, so the judgement visibly lands before the next stage.
+  const RATING_REACTION = {
+    Both: "Then I read you right this time. I'll build on that.",
+    "Decision only": "Right choice, wrong reason. Your reason is what I'll take from you.",
+    "Reason only": "I understood why, but not what you'd do. Your choice replaces my guess.",
+    Neither: "I got you wrong here. What you said now replaces my guess."
+  };
   window.renderPrediction = () => {
     const s = sessionState, u = ui(), prediction = s.predicted.predictions[0], actual = s.predicted.participantAnswers[0], comparison = s.predicted.comparisons[0];
     const ready = u.s4Pred?.status === "ready" && prediction?.predicted_response;
@@ -986,8 +1001,8 @@
     const choices = ["Both", "Decision only", "Reason only", "Neither"].map(v => `<button type="button" class="choice" data-action="rate-prediction" data-value="${v}" aria-pressed="${comparison?.rating === v}">${v}</button>`).join("");
     return screen("predict", `${head("Did I get your decision right, your reason right, both, or neither?", { meta: "Prediction and reality", promptKey: "prediction-compare" })}
       <div class="split split--compare"><section class="side side--model">${columnLabel("YOUR AI SELF SAID")}${s.predicted.mode === "mock" ? tag("demo") : ""}<p class="claim">${esc(unquote(prediction?.predicted_response || ""))}</p></section>
-      <section class="side side--you">${columnLabel("YOU SAID")}${tag(actual?.textOrigin === "transcribed" ? "heard" : "you")}<p class="you-claim">${esc(actual?.text || "")}</p></section></div>
-      <div class="verdict"><div class="choices" role="group" aria-label="What did the prediction get right">${choices}</div><div class="inline-field"><label for="predictionCorrection">What did I miss? (optional)</label><textarea id="predictionCorrection" placeholder="In your own words…">${esc(comparison?.explanation || "")}</textarea></div><p class="hint">A different answer isn't a contradiction. People answer new situations differently.</p></div>`);
+      <section class="side side--you">${columnLabel("YOU SAID")}${actual?.textOrigin === "transcribed" ? tag("heard") : ""}<p class="you-claim">${esc(actual?.text || "")}</p></section></div>
+      <div class="verdict"><div class="choices" role="group" aria-label="What did the prediction get right">${choices}</div>${comparison?.rating ? `<div class="rating-reaction" role="status">${voiceLabel("system_interpreter")}<p>${RATING_REACTION[comparison.rating] || ""} Anything you add below changes what your AI Self says next.</p></div>` : ""}<div class="inline-field"><label for="predictionCorrection">What did I miss? (optional)</label><textarea id="predictionCorrection" placeholder="In your own words…">${esc(comparison?.explanation || "")}</textarea></div><p class="hint">A different answer isn't a contradiction. People answer new situations differently.</p></div>`);
   };
 
   /* ---------- threshold: the message, then three permission screens ---------- */
@@ -1006,7 +1021,7 @@
   function messageScreen() {
     return screen("permission", `<div class="permission">${head(proxyContext, { meta: "A message arrives", promptKey: "proxy-message" })}
       <div class="message-card"><p class="column-label">THEY MESSAGE YOU</p><p class="message-card__text">${esc(proxyMessage)}</p></div>
-      <p class="screen-context">Your AI self will answer this message for you.</p></div>`);
+      <p class="screen-context">Your AI Self will answer this message for you.</p></div>`);
   }
   function permission(n, title, uses, purpose, body, alternatives, state) {
     return screen("permission", `<div class="permission" data-permission="${n}">
@@ -1028,17 +1043,17 @@
       const picker = options.length ? `<div class="field"><label for="voiceSample">Which recording should it learn from?</label><select id="voiceSample">${options.map(([id, label]) => `<option value="${id}" ${sessionState.ui.selectedVoiceTarget === id ? "selected" : ""}>${label}</option>`).join("")}</select><audio controls src="${sample?.url || ""}" aria-label="Play the selected voice sample"></audio></div>` : '<p class="hint">No recording yet. Record a few sentences in your own voice.</p>';
       const recorderUi = active ? `<div class="rec-live"><span class="rec-dot" aria-hidden="true"></span><output id="recordClock">00:00</output><span class="rec-limit">/ 01:00</span><canvas class="rec-wave" id="recWave" width="240" height="40" aria-hidden="true"></canvas></div>${row(baseAct("stop-recording", "Stop recording", "btn-primary"))}`
         : row(baseAct("start-recording", options.length ? "Record a new sample" : "Record a voice sample", "btn-secondary", busy ? "disabled" : ""));
-      const unavailable = capabilities?.elevenlabs === false ? calm("Voice cloning is not set up on this server, so your AI self will reply in text.") : "";
-      return permission(1, "Your words, in your voice?", "One recording of your own voice that you choose here.", "ElevenLabs creates a temporary clone so your AI self's reply is spoken in your voice. Deletion of the clone is requested afterwards; provider retention may still apply.",
+      const unavailable = capabilities?.elevenlabs === false ? calm("Voice cloning is not set up on this server, so your AI Self will reply in text.") : "";
+      return permission(1, "Your words, in your voice?", "One recording of your own voice that you choose here.", "ElevenLabs creates a temporary clone so your AI Self's reply is spoken in your voice. Deletion of the clone is requested afterwards; provider retention may still apply.",
         `<div class="permission-tools">${picker}<div class="field">${recorderUi}${deviceNotice("microphone")}</div></div>${unavailable}`,
         "", c.voiceCloning ? "Currently allowed." : "");
     }
     const portrait = sessionState.supplied.portrait, reviewing = portrait && !u.retakingPortrait;
-    const frame = reviewing ? `<div class="portrait-frame"><figure class="portrait-frame">${tag("you", "YOUR PORTRAIT")}<img src="${portrait.url}" alt="Your captured portrait"><figcaption>${u.portraitConfirmed ? "Confirmed as the face of your AI self." : "Not used until you confirm it."}</figcaption></figure>${row(act("retake-portrait", "Retake", "btn-secondary"))}</div>`
+    const frame = reviewing ? `<div class="portrait-frame"><figure class="portrait-frame">${tag("you", "YOUR PORTRAIT")}<img src="${portrait.url}" alt="Your captured portrait"><figcaption>${u.portraitConfirmed ? "Confirmed as the face of your AI Self." : "Not used until you confirm it."}</figcaption></figure>${row(act("retake-portrait", "Retake", "btn-secondary"))}</div>`
       : `<div class="portrait-frame portrait-frame--live"><div id="portraitCameraSlot"></div>${cameraStream ? row(act("take-portrait", "Take photo", "btn-primary")) : row(act("camera-switch", "Turn on camera", "btn-secondary"))}<p class="hint">Look into the camera, face lit from the front. Your Stage 1 image is not reused.</p></div>`;
-    const blocked = !c.voiceCloning ? calm("Animation needs your cloned voice. You chose not to clone it, so your AI self will reply in text with no face.")
-      : capabilities?.did === false ? calm("Animation is not set up on this server, so your AI self will use your voice without a moving face.") : "";
-    return permission(2, "Give your AI self a face?", "A portrait you take and confirm here, plus the cloned audio. Never live video.", "D-ID animates the portrait so it appears to speak your AI self's reply. Deletion is requested afterwards; provider retention may still apply.",
+    const blocked = !c.voiceCloning ? calm("Animation needs your cloned voice. You chose not to clone it, so your AI Self will reply in text with no face.")
+      : capabilities?.did === false ? calm("Animation is not set up on this server, so your AI Self will use your voice without a moving face.") : "";
+    return permission(2, "Give your AI Self a face?", "A portrait you take and confirm here, plus the cloned audio. Never live video.", "D-ID animates the portrait so it appears to speak your AI Self's reply. Deletion is requested afterwards; provider retention may still apply.",
       blocked || `<div class="permission-tools permission-tools--portrait">${frame}${deviceNotice("camera")}</div>`,
       "", c.faceAnimation ? "Currently allowed." : "");
   }
@@ -1069,26 +1084,26 @@
   function doubleNote() {
     const s = sessionState, flow = ui().s5, media = s.generated.proxyMedia, item = s.generated.proxyResponses[0], ops = s.operations;
     const broke = k => failed(k) || ops[k]?.state === "fallback" && ops[k].errorCode !== "cancelled" && ops[k].errorCode !== "skipped";
-    if (!item && flow?.deleted) return { text: "You deleted your AI self's reply. Nothing of it is kept." };
-    if (!item) return !loadingMedia() && flow?.done ? { text: "Your AI self couldn't find words this time, so this part continues without a reply.", panel: capabilities?.openai === false ? whatHappened("proxy", { where: WHERE.proxy[0], what: "Service not set up. The AI server has no OpenAI key.", did: "Moved on without a reply.", help: "The researcher needs to add an OpenAI key to the server." }) : technical("proxy") } : null;
-    if (flow?.choice === "text") return { text: "You chose not to wait for the voice, so your AI self replies in text." };
-    if (flow?.choice === "audio") return { text: "You chose not to wait for the animation, so your AI self continues with audio and a still image." };
-    if (s.generated.proxyMode === "mock" && s.consent.voiceCloning) return { text: "In this demonstration nothing is sent to a voice or animation service, so your AI self replies in text." };
-    if (s.consent.voiceCloning && !media.audio && broke("elevenlabs")) return { text: "Your voice couldn't be created this time, so your AI self replies in text.", panel: technical("elevenlabs") };
-    if (s.consent.faceAnimation && media.audio && !media.video && broke("did")) return { text: "The animation couldn't finish, so your AI self will continue with audio and a still image.", panel: technical("did") };
+    if (!item && flow?.deleted) return { text: "You deleted your AI Self's reply. Nothing of it is kept." };
+    if (!item) return !loadingMedia() && flow?.done ? { text: "Your AI Self couldn't find words this time, so this part continues without a reply.", panel: capabilities?.openai === false ? whatHappened("proxy", { where: WHERE.proxy[0], what: "Service not set up. The AI server has no OpenAI key.", did: "Moved on without a reply.", help: "The researcher needs to add an OpenAI key to the server." }) : technical("proxy") } : null;
+    if (flow?.choice === "text") return { text: "You chose not to wait for the voice, so your AI Self replies in text." };
+    if (flow?.choice === "audio") return { text: "You chose not to wait for the animation, so your AI Self continues with audio and a still image." };
+    if (s.generated.proxyMode === "mock" && s.consent.voiceCloning) return { text: "In this demonstration nothing is sent to a voice or animation service, so your AI Self replies in text." };
+    if (s.consent.voiceCloning && !media.audio && broke("elevenlabs")) return { text: "Your voice couldn't be created this time, so your AI Self replies in text.", panel: technical("elevenlabs") };
+    if (s.consent.faceAnimation && media.audio && !media.video && broke("did")) return { text: "The animation couldn't finish, so your AI Self will continue with audio and a still image.", panel: technical("did") };
     return null;
   }
   function doubleMedia() {
     const media = sessionState.generated.proxyMedia, portrait = sessionState.supplied.portrait, loadingDid = activeOperations.has("did");
-    if (media.video) return `<div class="double-frame is-present"><video class="double-video" controls playsinline preload="metadata" src="${media.video.url}" aria-label="Your talking AI self"></video></div>`;
+    if (media.video) return `<div class="double-frame is-present"><video class="double-video" controls playsinline preload="metadata" src="${media.video.url}" aria-label="Your talking AI Self"></video></div>`;
     const still = portrait && sessionState.consent.faceAnimation ? `<img src="${portrait.url}" alt="Your still portrait; it is not animated">` : `<span class="double-frame__ghost" aria-hidden="true"></span>`;
-    return `<div class="double-frame ${loadingDid ? "is-forming" : ""}">${still}</div>${media.audio ? `<audio controls preload="metadata" src="${media.audio.url}" aria-label="Your AI self's reply in your cloned voice"></audio>` : ""}`;
+    return `<div class="double-frame ${loadingDid ? "is-forming" : ""}">${still}</div>${media.audio ? `<audio controls preload="metadata" src="${media.audio.url}" aria-label="Your AI Self's reply in your cloned voice"></audio>` : ""}`;
   }
   function mediaTruth() {
     const media = sessionState.generated.proxyMedia;
     return media.video ? "Talking portrait with your cloned voice" : media.audio ? (sessionState.consent.faceAnimation ? "Your cloned voice; the face is not animated" : "Your cloned voice, no face") : "Text only; no voice or animation";
   }
-  const progressLabel = { proxy: "Writing your AI self's reply", elevenlabs: "Creating your AI self's voice", did: "Animating your AI self" };
+  const progressLabel = { proxy: "Writing your AI Self's reply", elevenlabs: "Creating your AI Self's voice", did: "Animating your AI Self" };
   function sentencesOf(item) {
     if (!item.sentences) item.sentences = (ProxyText.clean(item.text).match(/[^.!?]+[.!?]+["”’']?|[^.!?]+$/g) || [item.text]).map(text => ({ text: text.trim(), mark: "", edit: "" })).filter(x => x.text);
     return item.sentences;
@@ -1108,22 +1123,24 @@
       <section class="overall"><p class="column-label">OVERALL · NO EXPLANATION NEEDED</p><div class="choices" role="group" aria-label="Your judgement of the whole reply">${choices}</div>
         ${editing ? `<div class="inline-field"><label for="proxyCorrection">What would you actually reply?</label><textarea id="proxyCorrection">${esc(item.correction || "")}</textarea>${row(baseAct("save-proxy-correction", "Keep my correction", "btn-secondary"), baseAct("cancel-proxy-correction", "Cancel", "btn-tertiary"))}</div>`
           : item.feedback === "corrected" && item.correction ? `<div class="you-statement">${tag("you", "WHAT YOU WOULD REPLY")}<p>${esc(item.correction)}</p></div>` : ""}
-        ${state ? `<p class="revision-note">${{ contested: "Your words now stand beside your AI self's.", rejected: "Rejected. It is not treated as something you would say.", confirmed: "Accepted as something you might say." }[state]}</p>` : ""}
+        ${state ? `<p class="revision-note">${{ contested: "Your words now stand beside your AI Self's.", rejected: "Rejected. It is not treated as something you would say.", confirmed: "Accepted as something you might say." }[state]}</p>` : ""}
         ${row(baseAct("delete-proxy", "Delete this reply", "btn-tertiary danger"))}</section>`);
   }
   window.renderProxy = () => {
     if (atCheckpoint()) return checkpoint();
     const s = sessionState, u = ui(), item = s.generated.proxyResponses[0], flow = u.s5;
-    if (!s.consent.proxyResponse) return screen("double", `${head("Your AI self stays silent.", { context: "You chose not to let the system reply as you. Nothing was generated." })}${row(act("permissions", "Review permissions", "btn-tertiary"))}`);
+    if (!s.consent.proxyResponse) return screen("double", `${head("Your AI Self stays silent.", { context: "You chose not to let the system reply as you. Nothing was generated." })}${row(act("permissions", "Review permissions", "btn-tertiary"))}`);
     if (item && u.proxyView === "review") return reviewScreen(item);
     const loading = loadingMedia(), note = doubleNote(), media = s.generated.proxyMedia;
+    // The portrait frame only appears when a voice or face is coming; a text-only reply starts at the top of the screen.
+    const stageShown = (s.consent.voiceCloning || s.consent.faceAnimation) && !(item && !media.audio && !media.video && !loading);
     const standard = item && !media.audio && !loading && "speechSynthesis" in window ? `${act("standard-voice", "Play in a standard voice (not yours)", "btn-tertiary")}<p class="hint">A standard computer voice from your browser, not a clone of yours.</p>` : "";
     // What the double took from the participant's Stage 4 correction, said to them before the reply itself.
     const changed = item?.correction_applied?.trim() ? `<p class="double-changed">${tag("double", "WHAT YOUR AI SELF CHANGED")}<span>${esc(item.correction_applied)}</span></p>` : "";
     const reply = item ? `<div class="double-reply">${voiceLabel("participant_double")}${tag("double", "GENERATED ON YOUR BEHALF · AI SELF")}${s.generated.proxyMode === "mock" ? tag("demo") : ""}${changed}<p class="double-speech">${esc(ProxyText.clean(item.text))}</p><p class="hint">An AI interpretation of you, not your real reply.</p>${evidence(item.evidence_ids, `<p>${esc(item.confidence_label)} confidence. This interpretation may be wrong.</p>`, "What did it draw on?", "proxy-evidence")}</div>` : "";
-    return screen("double", `${head(item ? "Your AI self has replied for you." : flow?.done ? "Your AI self has no reply this time." : "Your AI self is replying for you.", { meta: "Generated on your behalf" })}
-      <div class="split split--double"><section class="double-stage" aria-label="Your AI self">${doubleMedia()}<p class="media-truth">${item ? mediaTruth() : "Not yet generated"}</p></section>
-      <section class="double-script"><div class="message-card message-card--small"><p class="column-label">THEY MESSAGED YOU</p><p class="message-card__text">${esc(proxyMessage)}</p></div>
+    return screen("double", `${head(item ? "Your AI Self has replied for you." : flow?.done ? "Your AI Self has no reply this time." : "Your AI Self is replying for you.", { meta: "Generated on your behalf" })}
+      ${stageShown ? `<div class="split split--double"><section class="double-stage" aria-label="Your AI Self">${doubleMedia()}<p class="media-truth">${item ? mediaTruth() : "Not yet generated"}</p></section>` : `<div class="split split--double split--text-only">`}
+      <section class="double-script">${stageShown || !item ? "" : `<p class="media-truth">${mediaTruth()}</p>`}<div class="message-card message-card--small"><p class="column-label">THEY MESSAGED YOU</p><p class="message-card__text">${esc(proxyMessage)}</p></div>
         ${reply}${loading && flow ? progress(progressLabel[loading], flow.startedAt) : ""}${note ? calm(note.text) + (note.panel || "") : ""}${standard}
         ${row(act("permissions", "Review permissions", "btn-tertiary"))}</section></div>`);
   };
@@ -1159,7 +1176,7 @@
     return `${basis}<ul class="evidence-list">${rows}${conflicts}</ul><p>${tag("uncertain")} ${esc(item.confidence)} confidence. ${esc(item.uncertainty_statement)}</p><p>${tag("generated", "ANOTHER POSSIBLE ACTION")} ${esc(item.alternative_action)}</p><p>${tag("uncertain", "UNKNOWN")} ${item.unknowns.map(esc).join(" ") || "The actual outcome is unknown."}</p>`;
   }
   // Presentation only: the saved structured result becomes one scene, in the order a moment unfolds.
-  const SCENE_PARTS = [["thought", "predicted_thought", "First reaction"], ["decision", "predicted_decision", "The decision"], ["words", "predicted_dialogue", "What your AI self says"], ["action", "predicted_action", "What your AI self does"], ["consequence", "predicted_consequence", "What follows"]];
+  const SCENE_PARTS = [["thought", "predicted_thought", "First reaction"], ["decision", "predicted_decision", "The decision"], ["words", "predicted_dialogue", "What your AI Self says"], ["action", "predicted_action", "What your AI Self does"], ["consequence", "predicted_consequence", "What follows"]];
   const sceneText = (item, field) => field === "predicted_dialogue" ? (item.predicted_dialogue ? `“${unquote(item.predicted_dialogue)}”` : "") : item[field] || "";
   function narrative(item, withContext = true) {
     const parts = SCENE_PARTS.map(([key, field]) => { const text = sceneText(item, field); return text ? `<p class="${key === "thought" ? "narrative__inner" : key === "words" ? "narrative__speech" : ""}">${esc(text)}</p>` : ""; }).join("");
@@ -1191,11 +1208,11 @@
       <div class="inline-field"><label for="finalExplanation">If you want, say more.</label><textarea id="finalExplanation" maxlength="1200" placeholder="Optional">${esc(f.finalExplanation || "")}</textarea></div>` : "";
     // The double answers first; the participant's own choices appear once it has (or once they stop waiting).
     const cl = ui().closing, waiting = (!cl || cl.status === "loading") && !ui().answerNow;
-    const double = cl?.double ? `<p class="double-speech">${esc(cl.double.answer)}</p><p class="hint">Your AI self's answer, not yours.</p>`
-      : !cl || cl.status === "loading" ? thinking("Your AI self is answering") : cl.status === "failed" ? calm("Your AI self couldn't answer this time, so you answer alone.") + technical("closing") : "";
+    const double = cl?.double ? `<p class="double-speech">${esc(cl.double.answer)}</p><p class="hint">Your AI Self's answer, not yours.</p>`
+      : !cl || cl.status === "loading" ? thinking("Your AI Self is answering") : cl.status === "failed" ? calm("Your AI Self couldn't answer this time, so you answer alone.") + technical("closing") : "";
     return screen("final", `${head("Does this still feel like you?", { promptKey: "final-question", meta: "The last question" })}
       <p class="hint">${simLabel()} The scene before this was generated, not remembered.</p>
-      ${double ? `<section class="double-first" aria-label="Your AI self's answer">${voiceLabel("participant_double")}${tag("double", "YOUR AI SELF ANSWERS FIRST")}${double}</section>` : ""}
+      ${double ? `<section class="double-first" aria-label="Your AI Self's answer">${voiceLabel("participant_double")}${tag("double", "YOUR AI SELF ANSWERS FIRST")}${double}</section>` : ""}
       ${waiting ? "" : `<p class="column-label final-you">AND YOU?</p><div class="choices choices--large" role="group" aria-label="Does this still feel like you">${choices}</div>${wrong}`}`);
   }
 
@@ -1266,10 +1283,10 @@
   function closingScreen() {
     const cl = ui().closing, r = cl?.reading;
     const intro = cl?.double ? `${voiceLabel("participant_double")}${tag("double", "YOUR AI SELF, INTRODUCING ITSELF")}<ol class="closing__lines">${cl.double.introduction.map(l => `<li>${esc(l)}</li>`).join("")}</ol><p class="hint">Built from your answers and corrections. The system's version, not you.</p>`
-      : cl?.status === "loading" ? `${voiceLabel("participant_double")}${thinking("Your AI self is introducing itself")}`
-      : cl?.status === "failed" ? calm("Your AI self couldn't introduce itself this time. Your own judgements are below.") : "";
+      : cl?.status === "loading" ? `${voiceLabel("participant_double")}${thinking("Your AI Self is introducing itself")}`
+      : cl?.status === "failed" ? calm("Your AI Self couldn't introduce itself this time. Your own judgements are below.") : "";
     const line = r ? [r.came_close.trim() && `It came close on ${r.came_close.trim()}.`, r.missed.trim() && `It missed ${r.missed.trim()}.`].filter(Boolean).join(" ") : "";
-    return `<div class="closing ${yourImage() ? "" : "closing--no-image"}">${yourImage()}${intro ? `<section class="closing__intro" aria-label="Your AI self introduces itself">${intro}</section>` : ""}</div>
+    return `<div class="closing ${yourImage() ? "" : "closing--no-image"}">${yourImage()}${intro ? `<section class="closing__intro" aria-label="Your AI Self introduces itself">${intro}</section>` : ""}</div>
       <section class="closeness" aria-labelledby="closenessTitle"><p class="column-label" id="closenessTitle">HOW CLOSE IT CAME</p>${closeness()}
         ${line ? `<div class="closeness__reading">${voiceLabel("system_interpreter")}<p>${esc(line)}</p></div>` : ""}</section>`;
   }
@@ -1425,17 +1442,23 @@
     }[fb.state] || "";
     const buttons = fb.state === "sent" ? "" : row(act("send-feedback", fb.state === "sending" ? "Sending…" : fb.state === "failed" ? "Try sending again" : "Send feedback", "btn-secondary", fb.state === "sending" || !feedbackHasContent() || appConfig.serverless ? "disabled" : ""),
       ["failed", "unavailable"].includes(fb.state) || appConfig.serverless ? act("download-feedback", "Download a copy", "btn-tertiary") : "");
-    return screen("ending", `<div class="ending ending--closing"><p class="opening__kicker">THE EXPERIMENT ENDS HERE</p><h2 class="ending__title">The version of you it made</h2>
+    // Two pages: what the system made of them, then the end of the experience with its data and feedback.
+    if (ui().endStep !== "end") return screen("ending", `<div class="ending ending--closing"><p class="opening__kicker">WHAT IT MADE OF YOU</p><h2 class="ending__title">The version of you it made</h2>
       ${closingScreen()}
-      <p class="ending__note">What you supplied, what was inferred and what was invented have stayed separate. Your judgement is not an error to be corrected.</p>
-      ${row(baseAct("view-data", "See what the system held", "btn-tertiary"), baseAct("delete-session", "Delete this session", "btn-tertiary danger"))}
+      ${row(act("to-end", "Continue", "btn-primary btn-large"))}</div>`);
+    return screen("ending", `<div class="ending ending--last"><p class="opening__kicker">THE EXPERIMENT ENDS HERE</p><h2 class="opening__title ending__last-title">You are still the one who decides.</h2>
+      <p class="opening__lede">From one image, a story and a handful of choices, a system built a version of you. It predicted you, spoke as you and imagined you somewhere you have never been. Some of it came close. The parts it missed are the parts only you could give it.</p>
+      <p class="ending__note">What you supplied, what was inferred and what was invented stayed separate throughout. Your judgement was never an error to be corrected.</p>
+      <p class="ending__note">Everything from this session lives only in this browser's memory and disappears when you close the page. You can look through it or delete it now.</p>
+      ${row(baseAct("view-data", "See what the system held", "btn-secondary"), baseAct("delete-session", "Delete this session", "btn-secondary danger"))}
       <details class="evidence feedback-panel" data-keep="feedback"><summary>Share optional feedback</summary><div class="evidence-body feedback-form">
       ${questionsMarkup}
       <div class="field"><label for="fbBoundary">At which stage did the AI's version stop feeling like you?</label><select id="fbBoundary" ${locked ? "disabled" : ""}><option value="">Optional: choose a stage</option>${[...stages.map(st => st[0]), "It never felt like me", "It still feels like me", "I am unsure"].map(v => `<option value="${esc(v)}" ${fb.boundary === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></div>
       <div class="field"><label for="fbUnclear">Was any label unclear?</label><textarea id="fbUnclear" rows="2" maxlength="2000" ${locked ? "readonly" : ""}>${esc(fb.comments.unclear_label || "")}</textarea></div>
       <div class="field"><label for="fbComment">Anything else? (optional)</label><textarea id="fbComment" rows="2" maxlength="2000" ${locked ? "readonly" : ""}>${esc(fb.comments.comment || "")}</textarea></div>
       ${stateLine}${buttons}
-      <p class="hint">Only these answers, your comments and the prototype version are stored. Never your image, voice, answers from the experience or the system's version of you.</p></div></details></div>`);
+      <p class="hint">Only these answers, your comments and the prototype version are stored. Never your image, voice, answers from the experience or the system's version of you.</p></div></details>
+      ${row(act("to-closing", "Back to the version of you it made", "btn-tertiary"))}</div>`);
   };
   const pausedScreen = () => screen("ending", `<div class="ending"><p class="opening__kicker">PAUSED</p><h2 class="opening__title">You have stepped out.</h2><p class="opening__lede">Your temporary data is still in this browser's memory. Resume where you were, or delete everything.</p>${row(baseAct("resume", "Resume", "btn-primary"), baseAct("delete-session", "Delete session", "btn-secondary danger"))}</div>`);
 
@@ -1553,11 +1576,11 @@
         if (capabilities?.elevenlabs === false) return { label: "Continue with text only", enabled: true, run: () => finishConsent(true) };
         return { label: "Allow voice cloning", enabled: !!bestVoiceRecording() && !recorder, reason: recorder ? "Stop recording first." : "Record or choose a voice sample first.", run: () => { cs.voiceCloning = true; travel(() => { u.consentPage = 2; render(); }); }, alt: { label: "Use text only", run: () => finishConsent(true) } };
       }
-      if (!cs.voiceCloning || capabilities?.did === false) return { label: "Meet your AI self", enabled: true, run: () => { setFace(false); finishConsent(); } };
+      if (!cs.voiceCloning || capabilities?.did === false) return { label: "Meet your AI Self", enabled: true, run: () => { setFace(false); finishConsent(); } };
       const noFace = { label: "Continue without a face", run: () => { setFace(false); finishConsent(); } };
       if (!s.supplied.portrait || u.retakingPortrait) return { label: "Allow animation", enabled: false, reason: "Take your portrait first, or continue without a face.", alt: noFace };
       if (!u.portraitConfirmed) return { label: "Use this portrait", enabled: true, run: () => { u.portraitConfirmed = true; acknowledge = ""; render(); }, alt: noFace };
-      return { label: "Allow animation and meet your AI self", enabled: true, run: () => { cs.faceAnimation = true; finishConsent(); }, alt: noFace };
+      return { label: "Allow animation and meet your AI Self", enabled: true, run: () => { cs.faceAnimation = true; finishConsent(); }, alt: noFace };
     }
     if (stage === 1) {
       if (u.describing) return { label: "Continue", enabled: !!s.supplied.imageDescription?.trim(), reason: "Describe the image in a few words, or skip this step.", run: () => move("continue") };
@@ -1624,7 +1647,7 @@
         if (s.ui.correctingProxy) return { label: "Keep correction", enabled: true, run: saveProxyCorrection };
         return { label: "Continue to Stage 6", enabled: true, run: () => move("continue") };
       }
-      if (!item) return loading || (flow && !flow.done) ? { label: "Your AI self is writing…", enabled: false, reason: "" } : { label: "Continue to Stage 6", enabled: true, run: () => move("continue") };
+      if (!item) return loading || (flow && !flow.done) ? { label: "Your AI Self is writing…", enabled: false, reason: "" } : { label: "Continue to Stage 6", enabled: true, run: () => move("continue") };
       // Long waits offer a way on at once; the stable footer keeps the same controls in the same place.
       const waited = loading ? Date.now() - (s.operations[loading]?.updatedAt || Date.now()) : 0;
       if (loading === "elevenlabs") return { label: "Waiting for the voice…", enabled: false, reason: "", alt: waited > 8000 ? { label: "Continue with text", run: () => continueWith("text") } : null };
@@ -1633,7 +1656,7 @@
     }
     const item = s.generated.simulation;
     if (u.simulationStep === "final") {
-      if ((!u.closing || u.closing.status === "loading") && !u.answerNow) return { label: "Your AI self is answering…", enabled: false, reason: "", alt: { label: "Answer without waiting", run: () => { u.answerNow = true; render(); } } };
+      if ((!u.closing || u.closing.status === "loading") && !u.answerNow) return { label: "Your AI Self is answering…", enabled: false, reason: "", alt: { label: "Answer without waiting", run: () => { u.answerNow = true; render(); } } };
       return { label: "Finish", enabled: !!s.feedback.feelsLikeYou, reason: "Choose an answer first, or finish without this.", run: () => move("continue") };
     }
     if (u.simulationStep === "intro") {
@@ -1858,13 +1881,17 @@
     const currentSession = sessionState;
     if (!mockMode && !await verifyAccess(document.getElementById("accessCode")?.value ?? storedAccessCode())) return;
     if (currentSession !== sessionState || sessionState.ended) return;
-    travel(() => { sessionState.started = true; sessionState.currentStage = 1; render(); }, 1, markerFor(1));
+    travel(() => { ui().journey = true; render(); });
+  }
+  function startJourney() {
+    if (transitioning || sessionState.ended) return;
+    travel(() => { ui().journey = false; sessionState.started = true; sessionState.currentStage = 1; render(); }, 1, markerFor(1));
   }
 
   /* ---------- render wrapper ---------- */
   function screenKey() {
     const s = sessionState, u = ui(), c = u.conv, key = s.currentStage === 2 ? "story" : `question_${s.questionIndex + 1}`;
-    return [s.started, s.ended, s.finished, s.currentStage, s.questionIndex, s.ui.profilePage, s.predictionShown, u.checkpoint, u.messageSeen, u.consentPage, u.simulationStep, u.proxyView, u.s4, u.s4Pred?.status, u.describing,
+    return [s.started, s.ended, s.finished, u.journey, u.endStep, s.currentStage, s.questionIndex, s.ui.profilePage, s.predictionShown, u.checkpoint, u.messageSeen, u.consentPage, u.simulationStep, u.proxyView, u.s4, u.s4Pred?.status, u.describing,
       c.image?.status, c.moments[key]?.status, c.s3, c.review?.status, c.detour, !!s.generated.proxyResponses.length, !!s.generated.simulation, !!s.inferred.profile].join("|");
   }
   // Re-rendering replaces nodes; return keyboard focus to the equivalent control.
@@ -2202,6 +2229,9 @@
     }
     if (action === "show-all") return showAll();
     if (action === "retry-interlude") { u.interlude = null; render(); return; }
+    if (action === "start-journey") return startJourney();
+    if (action === "journey-back") { if (!transitioning) travel(() => { u.journey = false; render(); }, -1); return; }
+    if (action === "to-end" || action === "to-closing") { if (!transitioning) travel(() => { u.endStep = action === "to-end" ? "end" : ""; render(); }, action === "to-end" ? 1 : -1); return; }
     if (action === "delete-closing") { const cl = u.closing; if (cl) Object.assign(cl, { double: null, reading: null, status: "deleted" }); renderData(); render(); return; }
     if (action === "delete-simulation") {
       if (activeOperations.has("fiction")) cancelActiveOperations();

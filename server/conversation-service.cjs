@@ -80,6 +80,7 @@ Answers whose question quotes an AI suggestion ("The AI suggested: ...") record 
 3. interpretation: when a specific pattern is visible, set offer to true and write claim as two short sentences (at most 45 words). First, recognition: name one or two specific choices and the reasons they gave, in their own terms (e.g. "You said you would keep the promise, but you would also tell your manager what you were giving up."). Second, one slightly challenging, conditional leap about what that might mean (e.g. "You may want the other person to see what keeping a promise costs you."). These examples show the level of specificity only; never reuse them without matching evidence. Connect at most two answers; never summarise everything. Name competing motives, a compromise they accept, or a gap between what they value and what they would do. It may be flattering, neutral or uncomfortable; not every pattern is a flaw.
 When both a contradiction and an interpretation are present, the interpretation must be about something other than the tension (never cite both of its answers).
 When sparse is true the answers are too brief to interpret: set interpretation.offer and contradiction.present to false and real_difference to false. You may raise one open question. inferred names the leap you made; unknown names what you cannot know; evidence holds one to three exact excerpts. Do not offer a claim that merely restates one answer. If nothing meaningful stands out, set offer to false with empty strings and an empty evidence array.
+This reading is about the three situations (question_1 to question_3 and their follow-ups). The image story was already discussed in Stage 2: never make it the subject here. An interpretation must cite at least one situation answer, and may bring in the image story only alongside one.
 4. closing: one short sentence (at most 20 words) that closes this part of the conversation. It must not interpret, judge or claim there is a pattern; for example "That's all three. I'll keep them as you wrote them."
 ${RULES}` });
 
@@ -282,6 +283,8 @@ async function synthesise(input, options = {}) {
         errors.push(...claimErrors(i.claim, cited, "claim"));
         if (!i.inferred.trim() || !i.unknown.trim()) errors.push("inferred and unknown are required when offering a claim.");
         if (!i.evidence.length || i.evidence.length > 3) errors.push("A claim needs one to three exact excerpts.");
+        // The image story had its own reading in Stage 2; this one is about the situations.
+        if (input.answers.some(a => /^question_\d$/.test(a.id)) && !i.evidence.some(e => /^question_\d(_followup)?$/.test(e.source_id))) errors.push("This reading is about the three situations: cite at least one situation answer (question_N), not only the image story.");
         errors.push(...quoteErrors(i.evidence, sources, "interpretation.evidence"));
       }
       return errors;
@@ -448,6 +451,7 @@ ${RULES}` });
 const CLOSING_READING_PROMPT = compose({ speaker: SPEAKERS.SYSTEM, task: `Task: the experience is ending. judgements records how the participant judged each version of them the system produced: the Stage 4 prediction, the Stage 5 reply written on their behalf and the Stage 6 scene. Write two short phrases:
 - came_close: completes "It came close on …" (at most 12 words), naming the specific area the versions got right, e.g. "how you handle credit at work". Base it only on what they accepted or marked as like them; an empty string if they accepted nothing.
 - missed: completes "It missed …" (at most 12 words), naming the specific area the versions got wrong, e.g. "how much you give way with family". Base it on their corrections, rejections and leaps; an empty string if they rejected nothing.
+came_close and missed must name two clearly different areas: an area that appears in any corrected or rejected judgement belongs in missed and never in came_close (never "It came close on family pressure" alongside "It missed how far you give in to your parents"). If every accepted judgement concerns an area they also corrected, set came_close to an empty string.
 Name areas of their life or behaviour in their terms, not stages or features of the system. No type labels, no scores.
 ${RULES}` });
 const VERDICTS = ["accepted", "partly", "corrected", "rejected"];
@@ -487,6 +491,8 @@ async function closing(input, options = {}) {
       const errors = [...textErrors(`${data.came_close} ${data.missed}`, "reading")];
       if (words(data.came_close) > 14 || words(data.missed) > 14) errors.push("Each phrase is at most 12 words.");
       if (!data.came_close.trim() && !data.missed.trim()) errors.push("Name at least one area, from what they accepted or corrected.");
+      const shared = contentWords(data.missed).filter(w => contentWords(data.came_close).includes(w) && !/^(their|other|people|something)$/.test(w));
+      if (shared.length) errors.push(`came_close and missed overlap (${shared.join(", ")}): they must name two different areas.`);
       return errors;
     }
   }) : Promise.resolve(null);

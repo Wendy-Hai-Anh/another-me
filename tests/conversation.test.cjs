@@ -224,3 +224,25 @@ test("the ending: the double answers first and introduces itself, and takes a co
   await assert.rejects(conversation.closing({ answers }, { client: fakeClient(looks, looks, looks) }));
   await assert.rejects(conversation.closing({ answers, judgements: [{ stage: "stage9", verdict: "accepted", text: "x" }] }, { client: fakeClient() }));
 });
+
+test("reading the three answers together is about the situations, not the image story again", async () => {
+  const withStory = [...answers, story];
+  const none = { present: false, first: { source_id: "", quote: "" }, second: { source_id: "", quote: "" }, comparison: "", question: "" };
+  const base = { ...tensionOutput, difference_check: { ...tensionOutput.difference_check, real_difference: false }, contradiction: none, uncertainty: { present: false, about: "", question: "" } };
+  const storyOnly = { ...base, interpretation: { offer: true, claim: "You said it's your desk at 2am. You may only work like that when panic arrives.", inferred: "x", unknown: "y", evidence: [{ source_id: "image_story", quote: "It's my desk at 2am" }] } };
+  const situation = { ...base, interpretation: { offer: true, claim: "You said keeping your word is everything to you. You may hold others to it as tightly as yourself.", inferred: "x", unknown: "y", evidence: [{ source_id: "question_1", quote: "Keeping your word is everything to me." }] } };
+  const client = fakeClient(storyOnly, situation);
+  const result = await conversation.synthesise({ answers: withStory }, { client });
+  assert.equal(client.requests.length, 2);
+  assert.equal(result.interpretation.evidence[0].source_id, "question_1");
+});
+
+test("the ending's closing line names two different areas", async () => {
+  const closingAnswers = [story, { id: "question_1", question: "Credit taken in a meeting", answer: "I'd say nothing in the room and mention it after, quietly." }];
+  const judgements = [{ stage: "stage4", verdict: "rejected", text: "Family dilemma. Their correction: I would give in more to my family." }, { stage: "stage5", verdict: "accepted", text: "A line: I can help for a couple of hours." }];
+  const intro = { answer: "Partly. I'd still say nothing in the room.", introduction: ["I am you.", "I chose my desk because I only work like that when I panic.", "You corrected me: I would give in more to my family."], evidence_ids: ["image_story"] };
+  const overlap = { came_close: "family pressure and helping out", missed: "how far you give in to family" };
+  const distinct = { came_close: "agreeing to help while keeping some time back", missed: "how far you give in to your parents" };
+  const result = await conversation.closing({ answers: closingAnswers, judgements }, { client: fakeClient(intro, overlap, distinct) });
+  assert.deepEqual(result.reading, distinct);
+});

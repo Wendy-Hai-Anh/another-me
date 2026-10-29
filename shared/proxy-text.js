@@ -17,7 +17,7 @@
   function forSpeech(value) {
     const cleaned = clean(value);
     // Do not send a broken or reference-filled script to a paid voice provider.
-    if (!cleaned || hasReferences(cleaned)) throw new Error("The double's script contains source notes. Generate a new response before creating its voice.");
+    if (!cleaned || hasReferences(cleaned)) throw new Error("Your AI Self's script contains source notes. Generate a new response before creating its voice.");
     return cleaned;
   }
   return { clean, hasReferences, forSpeech };
