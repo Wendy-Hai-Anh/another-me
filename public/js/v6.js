@@ -1447,9 +1447,8 @@
       ${closingScreen()}
       ${row(act("to-end", "Continue", "btn-primary btn-large"))}</div>`);
     return screen("ending", `<div class="ending ending--last"><p class="opening__kicker">THE EXPERIMENT ENDS HERE</p><h2 class="opening__title ending__last-title">You are still the one who decides.</h2>
-      <p class="opening__lede">From one image, a story and a handful of choices, a system built a version of you. It predicted you, spoke as you and imagined you somewhere you have never been. Some of it came close. The parts it missed are the parts only you could give it.</p>
-      <p class="ending__note">What you supplied, what was inferred and what was invented stayed separate throughout. Your judgement was never an error to be corrected.</p>
-      <p class="ending__note">Everything from this session lives only in this browser's memory and disappears when you close the page. You can look through it or delete it now.</p>
+      <p class="opening__lede">From an image, a story and a few choices, a system built a version of you. Some of it came close. What it missed, only you could give it.</p>
+      <p class="ending__note">Your session stays in this browser and disappears when you close the page.</p>
       ${row(baseAct("view-data", "See what the system held", "btn-secondary"), baseAct("delete-session", "Delete this session", "btn-secondary danger"))}
       <details class="evidence feedback-panel" data-keep="feedback"><summary>Share optional feedback</summary><div class="evidence-body feedback-form">
       ${questionsMarkup}
