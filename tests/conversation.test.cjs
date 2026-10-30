@@ -147,6 +147,10 @@ test("image reading gives a stretched first impression traced to the scene, neve
   await assert.rejects(conversation.readImage({ image_base64: tiny, image_type: "image/jpeg" }, { client: fakeClient(untraced, untraced) }));
   const face = { ...ok, interpretation: "Perhaps your smiling face shows you want approval." };
   await assert.rejects(conversation.readImage({ image_base64: tiny, image_type: "image/jpeg" }, { client: fakeClient(face, face) }));
+  const worn = { ...ok, observation: "I can see a person wearing round glasses under bright ceiling lights." };
+  await assert.rejects(conversation.readImage({ image_base64: tiny, image_type: "image/jpeg" }, { client: fakeClient(worn, worn) }));
+  const scene = { ...ok, observation: "I can see two glasses of water on a bare desk." };
+  assert.deepEqual(await conversation.readImage({ image_base64: tiny, image_type: "image/jpeg" }, { client: fakeClient(scene) }), scene);
   await assert.rejects(conversation.readImage({ image_base64: tiny, image_type: "image/gif" }, { client: fakeClient(ok) }), error => error.statusCode === 400);
 });
 

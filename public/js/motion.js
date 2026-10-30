@@ -1,7 +1,7 @@
 "use strict";
 
 // One renderer owns the atmosphere; it never requests devices or reads participant text.
-// Geometry is adapted from the Neon Tunnel study: receding rings, longitudinal edges, light
+// Geometry comes from my own Neon Tunnel study: receding rings, longitudinal edges, light
 // streaks and a dark core. Early depths are round, faint and slow (human); deeper stages
 // become hexagonal, denser and more enclosed (synthetic). At rest the tunnel stays quiet so
 // text is readable; stage passages and the entrance "bloom" into saturated, shifting colour.

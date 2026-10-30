@@ -102,7 +102,7 @@
   const tag = (kind, text = "") => `<span class="tag tag--${kind}"><span aria-hidden="true">${TAGS[kind][0]}</span>${text || TAGS[kind][1]}</span>`;
   function idLine(meta = "") {
     const s = sessionState.currentStage;
-    const id = atCheckpoint() ? `<span class="screen-id__num">05</span>THRESHOLD` : `<span class="screen-id__num">${pad(s)}</span>${esc(stages[s - 1][0])}`;
+    const id = atCheckpoint() ? `<span class="screen-id__num">—</span>THRESHOLD` : `<span class="screen-id__num">${pad(s)}</span>${esc(stages[s - 1][0])}`;
     return `<p class="screen-id">${id}${meta ? `<span class="screen-id__meta">${meta}</span>` : ""}</p>`;
   }
   // bare: the stage line is already above (conversation screens put your words between it and the reply).
@@ -1737,13 +1737,15 @@
     travel(() => { u.checkpoint = false; u.proxyView = "response"; render(); }, 1, markerFor(5));
   }
   function enterCheckpoint() {
-    travel(() => { if (busy) cancelActiveOperations(); sessionState.currentStage = 5; Object.assign(ui(), { checkpoint: true, consentPage: 0, messageSeen: false }); render(); }, 1, { num: "05", title: "THRESHOLD" });
+    travel(() => { if (busy) cancelActiveOperations(); sessionState.currentStage = 5; Object.assign(ui(), { checkpoint: true, consentPage: 0, messageSeen: false }); render(); }, 1, THRESHOLD_MARKER);
   }
   function skipDouble() {
     if (busy) cancelActiveOperations();
     travel(() => { ui().checkpoint = false; sessionState.currentStage = 6; stopCamera(); sessionState.consent.cameraPresence = false; render(); }, 1, markerFor(6));
   }
   const markerFor = stage => ({ num: pad(stage), title: stages[stage - 1][0] });
+  // The threshold sits between Stages 4 and 5 and has no number; the dash matches its mark on the rail.
+  const THRESHOLD_MARKER = { num: "—", title: "THRESHOLD" };
 
   /* ---------- vertical travel: forward descends, back ascends ---------- */
   function cancelTransition() {
@@ -1854,7 +1856,7 @@
         return travel(() => { s.currentStage = 3; s.questionIndex = questions.length; render(); }, -1, markerFor(3));
       }
       if (stage === 5 && u.proxyView === "review") return travel(() => { u.proxyView = "response"; render(); }, -1);
-      if (stage === 5) return travel(() => { if (busy) cancelActiveOperations(); u.checkpoint = true; u.messageSeen = true; u.consentPage = 2; render(); }, -1, { num: "05", title: "THRESHOLD" });
+      if (stage === 5) return travel(() => { if (busy) cancelActiveOperations(); u.checkpoint = true; u.messageSeen = true; u.consentPage = 2; render(); }, -1, THRESHOLD_MARKER);
       if (stage === 6) {
         const steps = ["intro", "scene", "final"], index = steps.indexOf(u.simulationStep);
         if (index > 0 && s.generated.simulation) return travel(() => { u.simulationStep = steps[index - 1]; render(); }, -1);
@@ -1936,7 +1938,7 @@
     const s = sessionState, u = ui(), here = railPosition();
     if (transitioning || !s.started || s.ended || pos === here || pos > (u.reached || 0)) return;
     if (recorder) return status("Stop recording first so your voice answer is saved.", "error");
-    const marker = pos === 4.5 ? { num: "05", title: "THRESHOLD" } : markerFor(pos);
+    const marker = pos === 4.5 ? THRESHOLD_MARKER : markerFor(pos);
     travel(() => {
       if (busy) cancelActiveOperations("You moved to another stage. Everything already made is kept.");
       s.finished = false;
@@ -2168,7 +2170,7 @@
     if (action === "phone-cancel") { stopPhone(); u.phone = null; return render(); }
     if (action === "describe-image") { if (cameraStream) { stopCamera(); s.consent.cameraPresence = false; } u.describing = true; focusAfterRender = "imageDescription"; return travel(() => render()); }
     if (action === "stop-describing") return travel(() => { u.describing = false; render(); }, -1);
-    if (action === "permissions") { if (busy) cancelActiveOperations(); return travel(() => { u.checkpoint = true; u.messageSeen = true; u.consentPage = 0; render(); }, -1, { num: "05", title: "THRESHOLD" }); }
+    if (action === "permissions") { if (busy) cancelActiveOperations(); return travel(() => { u.checkpoint = true; u.messageSeen = true; u.consentPage = 0; render(); }, -1, THRESHOLD_MARKER); }
     if (action === "text-only") return finishConsent(true);
     if (action === "no-face") { setFace(false); return finishConsent(); }
     if (action === "skip-double") return skipDouble();
